@@ -19,8 +19,8 @@ WASM plugin system for Geese.
 [workspace.dependencies]
 
 # Internal dependencies
-wings = { path = "." }
-wings_macro = { path = "wings_macro" }
+wings = { path = ".", version = "0.0.0" }
+wings_macro = { path = "wings_macro", version = "0.0.0" }
 
 # External dependencies
 
