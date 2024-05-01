@@ -1,0 +1,41 @@
+[workspace]
+
+members = [
+    ".",
+    "wings_host",
+    "wings_macro"
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/DouglasDwyer/wings"
+readme = "README.md"
+description = """
+WASM plugin system for Geese.
+"""
+
+[workspace.dependencies]
+
+# Internal dependencies
+wings = { path = "." }
+wings_macro = { path = "wings_macro" }
+
+# External dependencies
+
+bincode = { version = "1.3.3", default-features = false }
+quote = { version = "1.0.36", default-features = false }
+proc-macro2 = { version = "1.0.81", default-features = false }
+serde = { version = "1.0.199", default-features = false }
+syn = { version = "2.0.60", default-features = false, features = [ "full", "parsing", "printing", "proc-macro" ] }
+
+[package]
+name = "wings"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bincode.workspace = true
+wings_macro.workspace = true
+serde.workspace = true
