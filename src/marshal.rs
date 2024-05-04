@@ -32,6 +32,12 @@ impl<T> From<*mut T> for GuestPointer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModuleDescriptor {
+    pub group_ty: ExportedType,
+    pub systems: Vec<ExportedType>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SystemDescriptor {
     pub ty: ExportedType,
     pub new_fn: GuestPointer,
@@ -311,6 +317,16 @@ impl<'a> SectionedBufferReader<'a> {
             }
         }
     }
+}
+
+pub unsafe fn write_to_marshal_buffer(x: &impl Serialize) -> GuestPointer {
+    let buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
+    buffer.clear();
+    buffer.extend(0u32.to_le_bytes());
+    bincode::serialize_into(&mut *buffer, x).expect("Failed to serialize buffer descriptor.");
+    let total_len = (buffer.len() - std::mem::size_of::<u32>()) as usize;
+    buffer[0..4].copy_from_slice(&total_len.to_le_bytes());
+    buffer.as_mut_ptr().into()
 }
 
 #[no_mangle]

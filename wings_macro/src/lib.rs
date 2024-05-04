@@ -44,7 +44,6 @@ pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 
 #[proc_macro_attribute]
 pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    static UNIQUE_ID: AtomicUsize = AtomicUsize::new(0);
     let system_traits = get_system_traits(attr);
     let original_item = TokenStream::from(item.clone());
 
@@ -52,9 +51,7 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
     let name = &item_type.ident;
     let name_str = name.to_string();
 
-    let crate_name = std::env::var("CARGO_CRATE_NAME").expect("Failed to get crate name");
-    let export_function_identifier = Ident::new(
-        &format!("__wings_describe_{}_{crate_name}_{}", crate_name.len(), UNIQUE_ID.fetch_add(1, Ordering::Relaxed)), Span::call_site());
+    let export_function_identifier = crate_unique_id("__wings_describe");
 
     quote! {
         #original_item
@@ -76,13 +73,7 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
             #[no_mangle]
             unsafe extern "C" fn #export_function_identifier () -> ::wings::marshal::GuestPointer {
                 let descriptor = ::wings::marshal::SystemDescriptor::new::< #name >();
-                let buffer = &mut * ::std::ptr::addr_of_mut!(::wings::marshal::MARSHAL_BUFFER);
-                buffer.clear();
-                buffer.extend(0u32.to_le_bytes());
-                ::wings::marshal::bincode::serialize_into(&mut * buffer, &descriptor).expect("Failed to serialize buffer descriptor.");
-                let total_len = (buffer.len() - std::mem::size_of::<u32>()) as usize;
-                buffer[0..4].copy_from_slice(&total_len.to_le_bytes());
-                buffer.as_mut_ptr().into()
+                ::wings::marshal::write_to_marshal_buffer(&descriptor)
             }
         };
     }.into()
@@ -166,6 +157,43 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
             #host_export_system
         };
     }.into()
+}
+
+#[proc_macro]
+pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(input)
+        .expect("Failed to parse system traits");
+
+    let [first, second] = system_trait_tuple.into_iter().collect::<Vec<_>>().try_into().ok().expect("Invalid number of arguments");
+    let Expr::Path(group_path) = first else { panic!("Invalid group type") };
+    let Expr::Array(systems) = second else { panic!("Invalid system array") };
+
+    let system_paths = systems.elems.into_iter().map(|x| match x {
+        Expr::Path(y) => y,
+        _ => panic!("Expected system type identifier")
+    }).collect::<Vec<_>>();
+
+    let instantiate_id = crate_unique_id("__wings_instantiate");
+
+    quote! {
+        const _: () = {
+            #[no_mangle]
+            unsafe extern "C" fn #instantiate_id () -> ::wings::marshal::GuestPointer {
+                let descriptor = ::wings::marshal::ModuleDescriptor {
+                    group_ty: <#group_path as ::wings::ExportType>::TYPE.into(),
+                    systems: vec!( #( <#system_paths as ::wings::ExportType>::TYPE.into() , )* )
+                };
+                ::wings::marshal::write_to_marshal_buffer(&descriptor)
+            }
+        };
+    }.into()
+}
+
+fn crate_unique_id(prefix: &str) -> Ident {
+    static UNIQUE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    let crate_name = std::env::var("CARGO_CRATE_NAME").expect("Failed to get crate name");
+    Ident::new(&format!("{prefix}_{}_{crate_name}_{}", crate_name.len(), UNIQUE_ID.fetch_add(1, Ordering::Relaxed)), Span::call_site())
 }
 
 fn is_host_request(attr: proc_macro::TokenStream) -> bool {
@@ -308,15 +336,12 @@ fn generate_make_temporary((identifier, ty): (&Ident, &Type)) -> TokenStream {
     }
 }
 
-fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<Ident> {
+fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<ExprPath> {
     let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(attr)
         .expect("Failed to parse system traits");
 
     system_trait_tuple.into_iter().map(|x| match x {
-        Expr::Path(y) => {
-            assert!(y.path.segments.len() == 1 && y.path.segments[0].arguments.is_none(), "Expected system trait name");
-            y.path.segments[0].ident.clone()
-        },
+        Expr::Path(y) => y,
         _ => panic!("Expected system trait name"),
     }).collect()
 }

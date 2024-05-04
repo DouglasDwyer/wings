@@ -1,13 +1,17 @@
 use example_host_system::*;
 use wings::*;
 
+instantiate_systems!(Client, [
+    Crunk
+]);
+
 #[system_trait]
 pub trait ThePublic {}
 
 #[system_trait]
 pub trait BhePublic {}
 
-#[export_system]
+#[export_system(ThePublic, BhePublic)]
 pub struct Crunk {
     ctx: WingsContextHandle<Self>
 }

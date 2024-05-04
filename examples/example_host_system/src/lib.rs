@@ -1,5 +1,8 @@
 use wings::*;
 
+#[export_type]
+pub struct Client;
+
 #[system_trait(host)]
 pub trait ExampleSystem: 'static {
     fn get_value(&self) -> u32;
