@@ -1,31 +1,58 @@
-use wings::*;
+use example_host_system::*;
+use geese::*;
+use wings_host::*;
 
-#[proxyable]
-pub trait Test {
-    fn best(&mut self, x: &mut i32) -> i32;
+pub struct TestHost;
+
+impl Host for TestHost {
+    const EVENTS: Events<Self> = events()
+        .with::<example_host_system::on::ExampleEvent>();
+    
+    const SYSTEMS: Systems<Self> = systems()
+        .with::<ExampleSystemImpl, dyn ExampleSystem>();
+
+    type Engine = wasmi::Engine;
+
+    fn create_engine() -> Self::Engine {
+        wasmi::Engine::new(&wasmi::Config::default())
+    }
 }
 
-pub struct ProxyImplementation;
+pub struct ExampleSystemImpl {
+    value: u32
+}
 
-impl Test for ProxyImplementation {
-    fn best(&mut self, x: &mut i32) -> i32 {
-        let result = *x + 1;
-        *x *= 2;
-        result
+impl ExampleSystem for ExampleSystemImpl {
+    fn get_value(&self) -> u32 {
+        self.value
+    }
+
+    fn set_and_double(&mut self, value: &mut u32) {
+        self.value = *value;
+        *value *= 2;
+    }
+}
+
+impl AsMut<dyn ExampleSystem> for ExampleSystemImpl {
+    fn as_mut(&mut self) -> &mut dyn ExampleSystem {
+        self
+    }
+}
+
+impl GeeseSystem for ExampleSystemImpl {
+    fn new(_: GeeseContextHandle<Self>) -> Self {
+        Self {
+            value: 0
+        }
     }
 }
 
 fn main() {
-    let mut proxy = <dyn Test as wings::marshal::Proxyable>::create_proxy(29);
+    let mut ctx = GeeseContext::default();
+    ctx.flush()
+        .with(geese::notify::add_system::<WingsHost<TestHost>>());
 
-    let mut x = 7;
-
-    println!("Hi {x} {:?}", proxy.best(&mut x));
-}
-
-#[no_mangle]
-unsafe extern "C" fn __wings_invoke_host(pointer: u32, size: u32) -> u32 {
-    let mut imple = ProxyImplementation;
-    <dyn Test as wings::marshal::Proxyable>::invoke(&mut imple, 0, &mut wings::marshal::MARSHAL_BUFFER).unwrap();
-    wings::marshal::MARSHAL_BUFFER.as_mut_ptr() as u32
+    let mut host = ctx.get::<WingsHost<TestHost>>();
+    let module = host.load(&include_bytes!("../target/wasm32-unknown-unknown/debug/example_plugin.wasm")[..]);
+    println!("GOT {module:?}");
 }

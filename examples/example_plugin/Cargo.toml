@@ -1,0 +1,18 @@
+cargo-features = ["per-package-target"]
+
+[package]
+name = "example_plugin"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description.workspace = true
+forced-target = "wasm32-unknown-unknown"
+
+[lib]
+crate-type = [ "rlib", "cdylib" ]
+
+[dependencies]
+example_host_system.workspace = true
+wings.workspace = true

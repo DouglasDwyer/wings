@@ -1,9 +1,60 @@
 pub use bincode;
+pub use serde;
+
 use crate::*;
-use serde::*;
-use serde::de::*;
 use std::mem::*;
 use std::ops::*;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct GuestPointer(u32);
+
+impl GuestPointer {
+    pub fn cast<T>(self) -> *const T {
+        self.0 as *const T
+    }
+
+    pub fn cast_mut<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+impl<T> From<*const T> for GuestPointer {
+    fn from(value: *const T) -> Self {
+        Self(value as u32)
+    }
+}
+
+impl<T> From<*mut T> for GuestPointer {
+    fn from(value: *mut T) -> Self {
+        Self(value as u32)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SystemDescriptor {
+    pub ty: ExportedType,
+    pub new_fn: GuestPointer,
+    pub drop_fn: GuestPointer,
+    // todo: exported interfaces. What data will I need?
+    pub dependencies: Vec<ExportedType>,
+}
+
+impl SystemDescriptor {
+    pub fn new<S: WingsSystem>() -> Self {
+        let ty = S::TYPE.into();
+        let new_fn = (S::new as *const ()).into();
+        let drop_fn = std::ptr::null_mut::<u8>().into();
+        let dependencies = S::DEPENDENCIES.inner.into_iter().map(|x| x.system_trait.into()).collect();
+
+        SystemDescriptor {
+            ty,
+            new_fn,
+            drop_fn,
+            dependencies
+        }
+    }
+}
 
 pub trait Proxyable {
     type Proxy: Deref<Target = Self>;
@@ -263,15 +314,16 @@ impl<'a> SectionedBufferReader<'a> {
 }
 
 #[no_mangle]
-unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> u32 {
+unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     let buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
     let to_reserve = size as usize;
     buffer.clear();
     buffer.reserve(to_reserve);
     buffer.set_len(to_reserve);
-    buffer.as_mut_ptr() as u32
+    buffer.as_mut_ptr().into()
 }
 
 extern "C" {
-    pub fn __wings_invoke_host(pointer: u32, size: u32) -> u32;
+    pub fn __wings_invoke_proxy_function(id: u32, func_index: u32, pointer: GuestPointer, size: u32);
+    pub fn __wings_raise_event(pointer: GuestPointer, size: u32);
 }

@@ -4,3 +4,11 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+const_list.workspace = true
+geese.workspace = true
+wasm_runtime_layer.workspace = true
+wings.workspace = true
+
+[build-dependencies]
+rustversion.workspace = true

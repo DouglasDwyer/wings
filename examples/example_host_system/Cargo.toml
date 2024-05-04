@@ -1,0 +1,11 @@
+[package]
+name = "example_host_system"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description.workspace = true
+
+[dependencies]
+wings.workspace = true
