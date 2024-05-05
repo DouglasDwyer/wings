@@ -13,6 +13,10 @@ use std::rc::*;
 pub struct GuestPointer(u32);
 
 impl GuestPointer {
+    pub fn new(pointer: u32) -> Self {
+        Self(pointer)
+    }
+
     pub fn cast<T>(self) -> *const T {
         self.0 as *const T
     }
@@ -34,12 +38,24 @@ impl<T> From<*mut T> for GuestPointer {
     }
 }
 
+impl From<GuestPointer> for i32 {
+    fn from(value: GuestPointer) -> Self {
+        value.0 as i32
+    }
+}
+
+impl From<GuestPointer> for u32 {
+    fn from(value: GuestPointer) -> Self {
+        value.0 as u32
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct FatGuestPointer([u32; 2]);
 
 impl FatGuestPointer {
-    pub fn from_parts(pointer: GuestPointer, metadata: GuestPointer) -> Self {
+    pub fn new(pointer: GuestPointer, metadata: GuestPointer) -> Self {
         Self([pointer.0, metadata.0])
     }
 
@@ -119,15 +135,30 @@ impl SystemDescriptor {
         });
     }
 
-    unsafe fn create_system<S: WingsSystem>() -> *mut RefCell<S> {
-        let dependencies = bincode::deserialize(&*std::ptr::addr_of!(MARSHAL_BUFFER))
+    unsafe fn create_system<S: WingsSystem>(_: *const ()) -> *mut RefCell<S> {
+        let raw_dependencies = bincode::deserialize::<Vec<DependencyReference>>(&*std::ptr::addr_of!(MARSHAL_BUFFER))
             .expect("Failed to deserialize dependencies");
+
+        assert!(raw_dependencies.len() == S::DEPENDENCIES.inner.iter().count(), "Dependencies were of incorrect length");
+        let mut dependencies = Vec::with_capacity(raw_dependencies.len());
+        for (raw, dependency) in raw_dependencies.into_iter().zip(S::DEPENDENCIES.inner.iter()) {
+            dependencies.push(((dependency.ty)(), match raw {
+                DependencyReference::Local(pointer) => DependencyHolder::Local(pointer),
+                DependencyReference::Remote(id) => DependencyHolder::Remote((dependency.proxy_func)(id))
+            }));
+        }
 
         Box::leak(Box::new(RefCell::new(S::new(WingsContextHandle {
             dependencies,
             marker: PhantomData
         }))))
     }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub enum DependencyReference {
+    Local(FatGuestPointer),
+    Remote(u32)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,7 +169,7 @@ pub struct SystemTraitDescriptor {
 }
 
 pub trait Proxyable {
-    type Proxy: Deref<Target = Self>;
+    type Proxy: Deref<Target = Self> + DerefMut<Target = Self>;
 
     fn create_proxy(id: u32) -> Self::Proxy;
     unsafe fn invoke(&mut self, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError>;
@@ -210,12 +241,10 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a mut T {
     }
 
     fn lower_result(value: &T, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
-        println!("Lower it");
         bincode::serialize_into(buffer, value).map_err(WingsError::Serialization)
     }
 
     fn lift_result(&mut self, buffer: &[u8]) -> Result<(), WingsError> {
-        println!("Raise it");
         **self = Self::lift_argument(buffer)?;
         Ok(())
     }
@@ -376,6 +405,7 @@ impl<'a> SectionedBufferReader<'a> {
 
     pub fn section(&mut self) -> Result<&[u8], WingsError> {
         if self.buffer.len() < size_of::<u32>() {
+            unsafe { crate::marshal::__wings_dbg(2000 + self.buffer.len() as u32); }
             Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
         }
         else {
@@ -383,6 +413,7 @@ impl<'a> SectionedBufferReader<'a> {
             len_bytes.copy_from_slice(&self.buffer[0..size_of::<u32>()]);
             let len = u32::from_le_bytes(len_bytes) as usize;
             if self.buffer.len() < size_of::<u32>() + len {
+                unsafe { crate::marshal::__wings_dbg(1000 + len as u32); }
                 Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
             }
             else {

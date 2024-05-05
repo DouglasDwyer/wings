@@ -7,6 +7,7 @@ use serde::de::*;
 use std::any::*;
 use std::cell::*;
 use std::marker::*;
+use std::ops::*;
 use std::rc::*;
 use thiserror::*;
 pub use wings_macro::*;
@@ -74,7 +75,7 @@ pub const fn event_handlers<S: WingsSystem>() -> EventHandlers<S> {
 /// Represents a system-specific handle to a Wings context.
 pub struct WingsContextHandle<S: WingsSystem> {
     /// A list of references to all system dependencies.
-    dependencies: Vec<DependencyReference>,
+    dependencies: Vec<(TypeId, DependencyHolder)>,
     /// Phantom data to mark the system as used.
     marker: PhantomData<fn(S)>
 }
@@ -94,31 +95,34 @@ impl<S: WingsSystem> WingsContextHandle<S> {
 
     /// Obtains the specified system dependency.
     #[inline(always)]
-    pub fn get<T: SystemTrait + ?Sized>(&self) -> &T {
+    pub fn get<T: SystemTrait + ?Sized>(&self) -> SystemRef<T> {
         unsafe {
-            //&*self.get_dependency_ptr()
-            todo!()
+            let inner = match &self.dependencies.iter().find(|(x, _)| *x == TypeId::of::<T>())
+            .unwrap_or_else(|| panic!("System {} was not a dependency of {}", type_name::<T>(), type_name::<S>())).1 {
+                DependencyHolder::Local(pointer) => (*pointer.cast::<RefCell<T>>()).borrow(),
+                DependencyHolder::Remote(proxy) => Ref::map(proxy.downcast_ref::<RefCell<T::Proxy>>().unwrap_unchecked().borrow(), |x| &**x),
+            };
+
+            SystemRef {
+                inner
+            }
         }
     }
 
     /// Mutably obtains the specified system dependency.
     #[inline(always)]
-    pub fn get_mut<T: SystemTrait + ?Sized>(&mut self) -> &mut T {
+    pub fn get_mut<T: SystemTrait + ?Sized>(&mut self) -> SystemRefMut<T> {
         unsafe {
-            //&mut *self.get_dependency_ptr()
-            todo!()
-        }
-    }
+            let inner = match &self.dependencies.iter().find(|(x, _)| *x == TypeId::of::<T>())
+            .unwrap_or_else(|| panic!("System {} was not a dependency of {}", type_name::<T>(), type_name::<S>())).1 {
+                DependencyHolder::Local(pointer) => (*pointer.cast::<RefCell<T>>()).borrow_mut(),
+                DependencyHolder::Remote(proxy) => RefMut::map(proxy.downcast_ref::<RefCell<T::Proxy>>().unwrap_unchecked().borrow_mut(), |x| &mut **x),
+            };
 
-    /// Gets the pointer which references the given system dependency.
-    #[inline(always)]
-    fn get_dependency_ptr<T: SystemTrait + ?Sized>(&self) -> &Rc<RefCell<T>> {
-        /*unsafe {
-            &*self.dependencies.iter().find(|x| x.id == TypeId::of::<T>())
-                    .unwrap_or_else(|| panic!("System {} was not a dependency of {}", type_name::<T>(), type_name::<S>()))
-                    .pointer.cast()
-        }*/
-        todo!()
+            SystemRefMut {
+                inner
+            }
+        }
     }
 }
 
@@ -133,10 +137,40 @@ pub trait WingsSystem: ExportType + Sized {
     fn new(ctx: WingsContextHandle<Self>) -> Self;
 }
 
-/*
-pub struct SystemRef<'a, M: Mutability, S: ExportSystem + ?Sized> {
-    inner: 
-} */
+pub struct SystemRef<'a, S: ?Sized> {
+    inner: Ref<'a, S>
+}
+
+impl<'a, S: ?Sized> Deref for SystemRef<'a, S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.inner
+    }
+}
+
+pub struct SystemRefMut<'a, S: ?Sized> {
+    inner: RefMut<'a, S>
+}
+
+impl<'a, S: ?Sized> Deref for SystemRefMut<'a, S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.inner
+    }
+}
+
+impl<'a, S: ?Sized> DerefMut for SystemRefMut<'a, S> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.inner
+    }
+}
+
+enum DependencyHolder {
+    Local(FatGuestPointer),
+    Remote(Box<dyn Any>)
+}
 
 #[derive(Debug, Error)]
 pub enum WingsError {
@@ -147,19 +181,19 @@ pub enum WingsError {
     #[error("The module was invalid: {0}")]
     InvalidModule(String),
     #[error("An error occurred during boundary serialization: {0}")]
-    Serialization(bincode::Error)
+    Serialization(bincode::Error),
+    #[error("An error occurred during WASM execution: {0}")]
+    Trap(String)
 }
 
 impl WingsError {
     pub fn from_invalid_module(x: impl std::fmt::Display) -> Self {
         Self::InvalidModule(x.to_string())
     }
-}
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-enum DependencyReference {
-    Local(FatGuestPointer),
-    Remote(u32)
+    pub fn from_trap(x: impl std::fmt::Display) -> Self {
+        Self::Trap(x.to_string())
+    }
 }
 
 /// Hides traits from being externally visible.

@@ -1,7 +1,8 @@
+use crate::*;
 use serde::*;
 use std::any::*;
 
-pub trait SystemTrait: ExportType {
+pub trait SystemTrait: ExportType + Proxyable {
     const SYSTEM_TYPE: StaticExportedType;
 }
 
@@ -79,7 +80,8 @@ pub struct Version {
 pub struct DependencyType {
     pub exported_system: StaticExportedType,
     pub system_trait: StaticExportedType,
-    pub ty_func: fn() -> TypeId
+    pub ty: fn() -> TypeId,
+    pub proxy_func: fn(u32) -> Box<dyn Any>
 }
 
 impl DependencyType {
@@ -87,7 +89,8 @@ impl DependencyType {
         Self {
             exported_system: T::SYSTEM_TYPE,
             system_trait: T::TYPE,
-            ty_func: TypeId::of::<T>
+            ty: TypeId::of::<T>,
+            proxy_func: |x| Box::new(RefCell::new(T::create_proxy(x)))
         }
     }
 }
