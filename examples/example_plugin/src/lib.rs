@@ -42,8 +42,9 @@ impl WingsSystem for Crunk {
 
         let mut my_val = 22;
         ctx.get_mut::<dyn ExampleSystem>().set_and_double(&mut my_val);
-        ctx.get::<dyn TheSkunk>().bro(my_val);
         ctx.get::<dyn TheSkunk>().bro(ctx.get::<dyn ExampleSystem>().get_value());
+        ctx.get::<dyn ExampleSystem>().print(&format!("Your mom lol {}", my_val));
+
         Self {
             ctx
         }

@@ -183,28 +183,6 @@ pub trait MarshalAs<'a, T> {
     fn lift_result(&mut self, buffer: &[u8]) -> Result<(), WingsError>;
 }
 
-impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, Option<T>> for T {
-    fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
-        bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
-    }
-
-    fn lift_argument(buffer: &[u8]) -> Result<Option<T>, WingsError> {
-        bincode::deserialize(buffer).map(Some).map_err(WingsError::Serialization)
-    }
-
-    fn make_temporary(value: &'a mut Option<T>) -> Self {
-        take(value).expect("Attempted to make temporary from value twice.")
-    }
-
-    fn lower_result(_: &Option<T>, _: SectionedBufferWrite) -> Result<(), WingsError> {
-        Ok(())
-    }
-
-    fn lift_result(&mut self, _: &[u8]) -> Result<(), WingsError> {
-        Ok(())
-    }
-}
-
 impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a T {
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
@@ -246,6 +224,28 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a mut T {
 
     fn lift_result(&mut self, buffer: &[u8]) -> Result<(), WingsError> {
         **self = Self::lift_argument(buffer)?;
+        Ok(())
+    }
+}
+
+impl<'a> MarshalAs<'a, String> for &'a str {
+    fn lower_argument(&self, mut buffer: SectionedBufferWrite) -> Result<(), WingsError> {
+        bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
+    }
+
+    fn lift_argument(buffer: &[u8]) -> Result<String, WingsError> {
+        bincode::deserialize(buffer).map_err(WingsError::Serialization)
+    }
+
+    fn make_temporary(value: &'a mut String) -> Self {
+        &**value
+    }
+
+    fn lower_result(value: &String, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
+        Ok(())
+    }
+
+    fn lift_result(&mut self, _: &[u8]) -> Result<(), WingsError> {
         Ok(())
     }
 }

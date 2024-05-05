@@ -229,16 +229,16 @@ fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> T
 
 fn generate_proxy_function_and_invocation(index: u32, func_item: TraitItemFn) -> (TokenStream, TokenStream) {
     let func_args = get_non_receiver_args(&func_item);
-    let proxy_function = generate_proxy_function(index, &func_item, &func_args.index_args, &func_args.original_args);
+    let proxy_function = generate_proxy_function(index, &func_item, &func_args);
     let invocation = generate_proxy_invocation(index, &func_item, &func_args);
 
     (proxy_function, invocation)
 }
 
-fn generate_proxy_function(index: u32, func_item: &TraitItemFn, index_args: &[Ident], original_args: &[&Ident]) -> TokenStream {
-    let rebind_arguments = index_args.iter().zip(original_args.iter().copied()).map(generate_rebind_argument).collect::<Vec<_>>();
-    let lower_arguments = index_args.iter().map(generate_lower_argument).collect::<Vec<_>>();
-    let lift_results = index_args.iter().map(generate_lift_result).collect::<Vec<_>>();
+fn generate_proxy_function(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
+    let rebind_arguments = (0..args.original_args.len()).map(|x| generate_rebind_argument(x, args)).collect::<Vec<_>>();
+    let lower_arguments = args.index_args.iter().map(generate_lower_argument).collect::<Vec<_>>();
+    let lift_results = (0..args.original_args.len()).map(|x| generate_lift_result(x, args)).collect::<Vec<_>>();
     let mut signature = TokenStream::new();
     func_item.sig.to_tokens(&mut signature);
 
@@ -265,9 +265,9 @@ fn generate_proxy_function(index: u32, func_item: &TraitItemFn, index_args: &[Id
 
 fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
     let func_name = &func_item.sig.ident;
-    let lifted_arguments = args.index_args.iter().zip(args.arg_types.iter().copied()).map(generate_lift_argument);
-    let made_temporaries = args.index_args.iter().zip(args.arg_types.iter().copied()).map(generate_make_temporary);
-    let lowered_results = args.index_args.iter().zip(args.arg_types.iter().copied()).map(generate_lower_result);
+    let lifted_arguments = (0..args.original_args.len()).map(|x| generate_lift_argument(x, args)).collect::<Vec<_>>();
+    let made_temporaries = (0..args.original_args.len()).map(|x| generate_make_temporary(x, args)).collect::<Vec<_>>();
+    let lowered_results = (0..args.original_args.len()).map(|x| generate_lower_result(x, args)).collect::<Vec<_>>();
     let id = index as u32;
 
     quote! {
@@ -309,9 +309,20 @@ fn get_non_receiver_args(func_item: &TraitItemFn) -> FuncArgs {
     }
 }
 
-fn generate_rebind_argument((index_ident, original_ident): (&Ident, &Ident)) -> TokenStream {
-    quote! {
-        let mut #index_ident = #original_ident;
+fn generate_rebind_argument(index: usize, args: &FuncArgs) -> TokenStream {
+    let original_ident = args.original_args[index];
+    let index_ident = &args.index_args[index];
+    let reference = matches!(args.arg_types[index], Type::Reference(_));
+
+    if reference {
+        quote! {
+            let mut #index_ident = #original_ident;
+        }
+    }
+    else {
+        quote! {
+            let mut #index_ident = &#original_ident;
+        }
     }
 }
 
@@ -321,27 +332,66 @@ fn generate_lower_argument(identifier: &Ident) -> TokenStream {
     }
 }
 
-fn generate_lift_argument((identifier, ty): (&Ident, &Type)) -> TokenStream {
-    quote! {
-        let mut #identifier = <#ty as ::wings::marshal::MarshalAs<_>>::lift_argument(section_reader.section()?)?;
+fn generate_lift_argument(index: usize, args: &FuncArgs) -> TokenStream {
+    let identifier = &args.index_args[index];
+    let ty = &args.arg_types[index];
+    let reference = matches!(args.arg_types[index], Type::Reference(_));
+
+    if reference {
+        quote! {
+            let mut #identifier = <#ty as ::wings::marshal::MarshalAs<_>>::lift_argument(section_reader.section()?)?;
+        }
+    }
+    else {
+        quote! {
+            let mut #identifier = <&#ty as ::wings::marshal::MarshalAs<_>>::lift_argument(section_reader.section()?)?;
+        }
     }
 }
 
-fn generate_lift_result(identifier: &Ident) -> TokenStream {
-    quote! {
-        ::wings::marshal::MarshalAs::lift_result(&mut #identifier, section_reader.section().expect("Wings failed to get argument result section.")).expect("Wings failed to lift argument result.");
+fn generate_lift_result(index: usize, args: &FuncArgs) -> TokenStream {
+    let identifier = &args.index_args[index];
+    let reference = matches!(args.arg_types[index], Type::Reference(_));
+
+    if reference {
+        quote! {
+            ::wings::marshal::MarshalAs::lift_result(&mut #identifier, section_reader.section().expect("Wings failed to get argument result section.")).expect("Wings failed to lift argument result.");
+        }
+    }
+    else {
+        quote! {}
     }
 }
 
-fn generate_lower_result((identifier, ty): (&Ident, &Type)) -> TokenStream {
-    quote! {
-        <#ty as ::wings::marshal::MarshalAs<_>>::lower_result(&#identifier, section_writer.section())?;
+fn generate_lower_result(index: usize, args: &FuncArgs) -> TokenStream {
+    let identifier = &args.index_args[index];
+    let ty = &args.arg_types[index];
+    let reference = matches!(args.arg_types[index], Type::Reference(_));
+
+    if reference {
+        quote! {
+            <#ty as ::wings::marshal::MarshalAs<_>>::lower_result(&#identifier, section_writer.section())?;
+        }
+    }
+    else {
+        quote! { }
     }
 }
 
-fn generate_make_temporary((identifier, ty): (&Ident, &Type)) -> TokenStream {
-    quote! {
-        <#ty as ::wings::marshal::MarshalAs<_>>::make_temporary(&mut #identifier),
+fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
+    let identifier = &args.index_args[index];
+    let ty = &args.arg_types[index];
+    let reference = matches!(args.arg_types[index], Type::Reference(_));
+
+    if reference {
+        quote! {
+            <#ty as ::wings::marshal::MarshalAs<_>>::make_temporary(&mut #identifier),
+        }
+    }
+    else {
+        quote! {
+            #identifier,
+        }
     }
 }
 

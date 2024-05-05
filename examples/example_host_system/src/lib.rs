@@ -7,6 +7,7 @@ pub struct Client;
 pub trait ExampleSystem: 'static {
     fn get_value(&self) -> u32;
     fn set_and_double(&mut self, value: &mut u32);
+    fn print(&self, value: &str);
 }
 
 pub mod on {

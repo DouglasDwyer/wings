@@ -34,6 +34,10 @@ impl ExampleSystem for ExampleSystemImpl {
         self.value = *value;
         *value *= 2;
     }
+
+    fn print(&self, value: &str) {
+        println!("Plugin says {value}");
+    }
 }
 
 impl AsMut<dyn ExampleSystem> for ExampleSystemImpl {
