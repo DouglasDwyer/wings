@@ -1,4 +1,5 @@
 use serde::*;
+use std::any::*;
 
 pub trait SystemTrait: ExportType {
     const SYSTEM_TYPE: StaticExportedType;
@@ -78,13 +79,15 @@ pub struct Version {
 pub struct DependencyType {
     pub exported_system: StaticExportedType,
     pub system_trait: StaticExportedType,
+    pub ty_func: fn() -> TypeId
 }
 
 impl DependencyType {
     pub const fn new<T: SystemTrait + ?Sized>() -> Self {
         Self {
             exported_system: T::SYSTEM_TYPE,
-            system_trait: T::TYPE
+            system_trait: T::TYPE,
+            ty_func: TypeId::of::<T>
         }
     }
 }

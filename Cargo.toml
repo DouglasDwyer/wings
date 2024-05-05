@@ -38,7 +38,6 @@ quote = { version = "1.0.36", default-features = false }
 proc-macro2 = { version = "1.0.81", default-features = false }
 serde = { version = "1.0.199", default-features = false, features = [ "derive" ] }
 syn = { version = "2.0.60", default-features = false, features = [ "full", "parsing", "printing", "proc-macro" ] }
-sync_rw_cell = { version = "0.1.0", default-features = false }
 thiserror = { version = "1.0.59", default-features = false }
 topological-sort = { version = "0.2.2", default-features = false }
 wasm_runtime_layer = { version = "0.3.0", default-features = false }
@@ -57,7 +56,6 @@ description.workspace = true
 bincode.workspace = true
 const_list.workspace = true
 serde.workspace = true
-sync_rw_cell.workspace = true
 thiserror.workspace = true
 wings_macro.workspace = true
 

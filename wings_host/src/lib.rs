@@ -7,6 +7,7 @@ use private::*;
 use ::serde::*;
 use ::serde::de::*;
 use std::collections::*;
+use std::marker::*;
 use std::mem::*;
 use std::sync::*;
 use std::sync::atomic::*;
@@ -42,27 +43,49 @@ pub const fn events<H: Host>() -> Events<H> {
 }
 
 pub struct Systems<H: Host> {
-    inner: ConstList<'static, HostSystem<H>>
+    dependencies: geese::Dependencies,
+    traits: ConstList<'static, ConstList<'static, HostSystemTrait<H>>>
 }
 
 impl<H: Host> Systems<H> {
-    pub const fn with<S: GeeseSystem + AsMut<T>, T: Proxyable + SystemTrait + ?Sized>(&'static self) -> Self {
-        let dependency = Dependency::new::<S>();
-        let invoke = Self::invoke::<S, T>;
-
+    pub const fn with<S: GeeseSystem>(&'static self, traits: Traits<H, S>) -> Self {
         Self {
-            inner: self.inner.push(HostSystem { dependency, invoke })
+            dependencies: self.dependencies.with::<Mut<S>>(),
+            traits: self.traits.push(traits.inner)
         }
     }
 
-    fn invoke<S: GeeseSystem + AsMut<T>, T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
-        ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
-    }
 }
 
 pub const fn systems<H: Host>() -> Systems<H> {
     Systems {
-        inner: ConstList::new()
+        dependencies: geese::dependencies(),
+        traits: ConstList::new()
+    }
+}
+
+pub struct Traits<H: Host, S: GeeseSystem> {
+    inner: ConstList<'static, HostSystemTrait<H>>,
+    marker: PhantomData<fn(S)>
+}
+
+impl<H: Host, S: GeeseSystem> Traits<H, S> {
+    pub const fn with<T: Proxyable + SystemTrait + ?Sized>(&'static self) -> Self where S: AsMut<T> {
+        Self {
+            inner: self.inner.push(HostSystemTrait { ty: T::TYPE, invoke: Self::invoke::<T> }),
+            marker: PhantomData
+        }
+    }
+
+    unsafe fn invoke<T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError> where S: AsMut<T> {
+        ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
+    }
+}
+
+pub const fn traits<H: Host, S: GeeseSystem>() -> Traits<H, S> {
+    Traits {
+        inner: ConstList::new(),
+        marker: PhantomData
     }
 }
 
@@ -140,7 +163,6 @@ impl Eq for WingsModule {}
 pub struct WingsHost<H: Host> {
     engine: Engine<H::Engine>,
     id: u64,
-    instance_funcs: Vec<InstanceFuncs>,
     store: Option<wasm_runtime_layer::Store<WingsHostInner<H>, H::Engine>>
 }
 
@@ -239,15 +261,15 @@ impl<H: Host> WingsHost<H> {
 
     fn instantiate_modules(&mut self, image: &WingsImage) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
-        self.instance_funcs.clear();
-        self.instance_funcs.reserve(image.modules.len());
+        store.data_mut().instance_funcs.reserve(image.modules.len());
         
         for (index, module) in image.modules.iter().enumerate() {
             let imports = Self::create_host_imports(&mut store, index);
             let instance = Instance::new(&mut store, &module.0.module, &imports).map_err(WingsError::from_invalid_module)?;
             let Some(Extern::Memory(memory)) = instance.get_export(&mut store, "memory") else { unreachable!() };
             store.data_mut().memories.push(memory);
-            self.instance_funcs.push(Self::get_instance_funcs(&mut store, &instance)?);
+            let instance_funcs = Self::get_instance_funcs(&mut store, &instance)?;
+            store.data_mut().instance_funcs.push(instance_funcs);
         }
 
         Ok(())
@@ -259,7 +281,7 @@ impl<H: Host> WingsHost<H> {
             // todo: make sure no hanging deps
             let entry = image.systems[ty];
             let descriptor = &image.modules[entry.module_id as usize].0.metadata.system_descriptors[entry.system_id as usize];
-            
+
         }
 
         Ok(())
@@ -306,6 +328,7 @@ impl<H: Host> WingsHost<H> {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
         data.memories.clear();
         data.systems.clear();
+        data.instance_funcs.clear();
         self.store = Some(wasm_runtime_layer::Store::new(&self.engine, data));
     }
 
@@ -371,24 +394,42 @@ impl<H: Host> WingsHost<H> {
 
     fn create_host_inner(ctx: GeeseContextHandle<Self>) -> WingsHostInner<H> {
         let event_raisers = Self::get_event_raisers();
+        let invokers = Self::get_invokers();
+
+        let instance_funcs = Vec::new();
         let memories = Vec::new();
         let systems = Vec::new();
 
         WingsHostInner {
             ctx,
             event_raisers,
+            instance_funcs,
+            invokers,
             systems,
             memories
         }
     }
 
     fn create_invoke_proxy_func<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Func {
-        Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| unsafe {
             let [Value::I32(id), Value::I32(func_index), Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
             let mut buffer = Vec::with_capacity(len);
             let memory = ctx.data().memories[index].clone();
             memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
+
+            let system_index = *id as usize;
+            let data = ctx.data_mut();
+            if let Some(trait_holder) = data.invokers.get(system_index) {
+                (trait_holder.invoke)(&mut data.ctx, *func_index as u32, &mut buffer)?;
+            }
+            else {
+                todo!()
+                //let Some(holder) = data.systems.get(system_index - data.invokers.len()) else { anyhow::bail!("System index out-of-range") };
+                //let func = data.instance_funcs[holder.instance as usize].invoke_func.clone();
+                //func.call(&mut ctx, &[])
+            }
+
             Ok(())
         })
     }
@@ -452,21 +493,25 @@ impl<H: Host> WingsHost<H> {
     fn get_event_raisers() -> FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>> {
         FxHashMap::from_iter(H::EVENTS.event_raisers.iter().map(|x| (ExportedType::from(x.ty).into(), x.raise)))
     }
+
+    fn get_invokers() -> Vec<HostSystemTrait<H>> {
+        Vec::from_iter(H::SYSTEMS.traits.iter().flat_map(|x| x.iter()).copied())
+    }
 }
 
 impl<H: Host> GeeseSystem for WingsHost<H> {
+    const DEPENDENCIES: geese::Dependencies = H::SYSTEMS.dependencies;
+
     fn new(ctx: GeeseContextHandle<Self>) -> Self {
         const UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
         let engine = Engine::new(H::create_engine());
         let id = UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
-        let instance_funcs = Vec::new();
         let store = Some(wasm_runtime_layer::Store::new(&engine, Self::create_host_inner(ctx)));
 
         Self {
             engine,
             id,
-            instance_funcs,
             store
         }
     }
@@ -494,9 +539,19 @@ struct HostEventRaiser<H: Host> {
     pub raise: HostEventRaiserFunc<H>
 }
 
-struct HostSystem<H: Host> {
-    pub dependency: Dependency,
-    pub invoke: fn(&mut GeeseContextHandle<WingsHost<H>>, u32, &mut Vec<u8>) -> Result<(), WingsError>
+type HostInvokerFunc<H> = unsafe fn(&mut GeeseContextHandle<WingsHost<H>>, u32, *mut Vec<u8>) -> Result<(), WingsError>;
+
+struct HostSystemTrait<H: Host> {
+    pub ty: StaticExportedType,
+    pub invoke: HostInvokerFunc<H>
+}
+
+impl<H: Host> Copy for HostSystemTrait<H> {}
+
+impl<H: Host> Clone for HostSystemTrait<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -526,12 +581,15 @@ struct SystemEntry {
 #[derive(Clone, Debug)]
 struct SystemHolder {
     instance: u32,
-    pointer: GuestPointer,
+    pointer: FatGuestPointer,
+    drop_fn: GuestPointer
 }
 
 struct WingsHostInner<H: Host> {
     ctx: GeeseContextHandle<WingsHost<H>>,
     event_raisers: FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>>,
+    instance_funcs: Vec<InstanceFuncs>,
+    invokers: Vec<HostSystemTrait<H>>,
     systems: Vec<SystemHolder>,
     memories: Vec<Memory>
 }

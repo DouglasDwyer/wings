@@ -2,8 +2,11 @@ pub use bincode;
 pub use serde;
 
 use crate::*;
+use std::any::*;
+use std::cell::*;
 use std::mem::*;
 use std::ops::*;
+use std::rc::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(transparent)]
@@ -31,10 +34,55 @@ impl<T> From<*mut T> for GuestPointer {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(C)]
+pub struct FatGuestPointer([u32; 2]);
+
+impl FatGuestPointer {
+    pub fn from_parts(pointer: GuestPointer, metadata: GuestPointer) -> Self {
+        Self([pointer.0, metadata.0])
+    }
+
+    pub fn cast<T: ?Sized>(self) -> *const T {
+        unsafe {
+            (&self.0 as *const _ as *const *const T).read()
+        }
+    }
+
+    pub fn cast_mut<T: ?Sized>(self) -> *mut T {
+        unsafe {
+            (&self.0 as *const _ as *const *mut T).read()
+        }
+    }
+}
+
+impl<T: ?Sized> From<*const T> for FatGuestPointer {
+    fn from(value: *const T) -> Self {
+        unsafe {
+            let value_array = [value, value];
+            Self((&value_array as *const _ as *const [u32; 2]).read())
+        }
+    }
+}
+
+impl<T: ?Sized> From<*mut T> for FatGuestPointer {
+    fn from(value: *mut T) -> Self {
+        unsafe {
+            let value_array = [value, value];
+            Self((&value_array as *const _ as *const [u32; 2]).read())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstantiateGroup {
     pub group_ty: ExportedType,
     pub systems: Vec<ExportedType>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstantiateSystem {
+    dependencies: Vec<DependencyReference>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,7 +97,7 @@ pub struct SystemDescriptor {
 impl SystemDescriptor {
     pub fn new<S: WingsSystem>() -> Self {
         let ty = S::TYPE.into();
-        let new_fn = (S::new as *const ()).into();
+        let new_fn = (Self::create_system::<S> as *const ()).into();
         let drop_fn = std::ptr::null_mut::<u8>().into();
         let dependencies = S::DEPENDENCIES.inner.into_iter().map(|x| x.system_trait.into()).collect();
         let traits = Vec::new();
@@ -63,21 +111,37 @@ impl SystemDescriptor {
         }
     }
 
-    pub fn add_trait<S: SystemTrait + ?Sized>(&mut self) {
-        self.traits.push(SystemTraitDescriptor { ty: S::TYPE.into() });
+    pub fn add_trait<S: WingsSystem, W: SystemTrait + ?Sized>(&mut self, v_table: GuestPointer, invoke: unsafe fn(*mut RefCell<W>, u32, *mut Vec<u8>)) {
+        self.traits.push(SystemTraitDescriptor {
+            invoke: GuestPointer::from(invoke as *const ()),
+            ty: W::TYPE.into(),
+            v_table
+        });
+    }
+
+    unsafe fn create_system<S: WingsSystem>() -> *mut RefCell<S> {
+        let dependencies = bincode::deserialize(&*std::ptr::addr_of!(MARSHAL_BUFFER))
+            .expect("Failed to deserialize dependencies");
+
+        Box::leak(Box::new(RefCell::new(S::new(WingsContextHandle {
+            dependencies,
+            marker: PhantomData
+        }))))
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SystemTraitDescriptor {
-    pub ty: ExportedType
+    pub invoke: GuestPointer,
+    pub ty: ExportedType,
+    pub v_table: GuestPointer
 }
 
 pub trait Proxyable {
     type Proxy: Deref<Target = Self>;
 
     fn create_proxy(id: u32) -> Self::Proxy;
-    fn invoke(&mut self, func_index: u32, buffer: &mut Vec<u8>) -> Result<(), WingsError>;
+    unsafe fn invoke(&mut self, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError>;
 }
 
 pub trait MarshalAs<'a, T> {

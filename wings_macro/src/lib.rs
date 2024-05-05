@@ -76,7 +76,12 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
                 let mut descriptor = ::wings::marshal::SystemDescriptor::new::< #name >();
                 
                 #(
-                    descriptor.add_trait::< dyn #system_traits >();
+                    let sample_pointer = ::std::ptr::null::<#name>();
+                    let v_table = ::std::mem::transmute::<_, [ * const (); 2]>(sample_pointer as * const dyn #system_traits)[1].into();
+
+                    descriptor.add_trait::< #name, dyn #system_traits >(
+                        v_table,
+                        |system, func_index, buffer| ::wings::marshal::Proxyable::invoke(&mut *(*system).borrow_mut(), func_index, buffer).expect("Failed to call proxy function"));
                 )*
 
                 ::wings::marshal::write_to_marshal_buffer(&descriptor)
@@ -125,11 +130,9 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
                     TraitProxy(id)
                 }
 
-                fn invoke(&mut self, func_index: u32, buffer: &mut Vec<u8>) -> ::std::result::Result<(), ::wings::WingsError> {
-                    unsafe {
-                        #(#function_invocations)*
-                        Err(::wings::WingsError::InvalidFunction())
-                    }
+                unsafe fn invoke(&mut self, func_index: u32, buffer: *mut Vec<u8>) -> ::std::result::Result<(), ::wings::WingsError> {
+                    #(#function_invocations)*
+                    Err(::wings::WingsError::InvalidFunction())
                 }
             }
 
@@ -269,11 +272,11 @@ fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArg
 
     quote! {
         if func_index == #id {
-            let mut section_reader = ::wings::marshal::SectionedBufferReader::new(buffer);
+            let mut section_reader = ::wings::marshal::SectionedBufferReader::new(&mut *buffer);
             #(#lifted_arguments)*
-            let result = self.#func_name ( #(#made_temporaries)* );
             drop(section_reader);
-            let mut section_writer = ::wings::marshal::SectionedBufferWriter::new(buffer);
+            let result = self.#func_name ( #(#made_temporaries)* );
+            let mut section_writer = ::wings::marshal::SectionedBufferWriter::new(&mut *buffer);
             #(#lowered_results)*
             return ::wings::marshal::bincode::serialize_into(section_writer.section(), &result).map_err(::wings::WingsError::Serialization);
         }

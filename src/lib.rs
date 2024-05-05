@@ -5,8 +5,9 @@ use crate::private::*;
 use serde::*;
 use serde::de::*;
 use std::any::*;
+use std::cell::*;
 use std::marker::*;
-use sync_rw_cell::*;
+use std::rc::*;
 use thiserror::*;
 pub use wings_macro::*;
 
@@ -95,7 +96,8 @@ impl<S: WingsSystem> WingsContextHandle<S> {
     #[inline(always)]
     pub fn get<T: SystemTrait + ?Sized>(&self) -> &T {
         unsafe {
-            &*self.get_dependency_ptr()
+            //&*self.get_dependency_ptr()
+            todo!()
         }
     }
 
@@ -103,18 +105,20 @@ impl<S: WingsSystem> WingsContextHandle<S> {
     #[inline(always)]
     pub fn get_mut<T: SystemTrait + ?Sized>(&mut self) -> &mut T {
         unsafe {
-            &mut *self.get_dependency_ptr()
+            //&mut *self.get_dependency_ptr()
+            todo!()
         }
     }
 
     /// Gets the pointer which references the given system dependency.
     #[inline(always)]
-    fn get_dependency_ptr<T: SystemTrait + ?Sized>(&self) -> *mut T {
-        unsafe {
-            *self.dependencies.iter().find(|x| x.id == TypeId::of::<T>())
+    fn get_dependency_ptr<T: SystemTrait + ?Sized>(&self) -> &Rc<RefCell<T>> {
+        /*unsafe {
+            &*self.dependencies.iter().find(|x| x.id == TypeId::of::<T>())
                     .unwrap_or_else(|| panic!("System {} was not a dependency of {}", type_name::<T>(), type_name::<S>()))
-                    .reference.downcast_ref().unwrap_unchecked()
-        }
+                    .pointer.cast()
+        }*/
+        todo!()
     }
 }
 
@@ -152,9 +156,10 @@ impl WingsError {
     }
 }
 
-struct DependencyReference {
-    pub id: TypeId,
-    pub reference: Box<dyn Any>
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+enum DependencyReference {
+    Local(FatGuestPointer),
+    Remote(u32)
 }
 
 /// Hides traits from being externally visible.

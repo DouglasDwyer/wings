@@ -9,7 +9,8 @@ impl Host for TestHost {
         .with::<example_host_system::on::ExampleEvent>();
 
     const SYSTEMS: Systems<Self> = systems()
-        .with::<ExampleSystemImpl, dyn ExampleSystem>();
+        .with::<ExampleSystemImpl>(traits()
+            .with::<dyn example_host_system::ExampleSystem>());
 
     type Engine = wasmi::Engine;
 

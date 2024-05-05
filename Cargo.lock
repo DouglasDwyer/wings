@@ -266,12 +266,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c8640c5d730cb13ebd907d8d04b52f55ac9a2eec55b440c8892f40d56c76c1d"
 
 [[package]]
-name = "mutability_marker"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1301db9814e681d3ee45b001fd6d2888bb26fb00b84863ed1717829bd62dd5"
-
-[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -404,15 +398,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "sync_rw_cell"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91b5e30d028779dd15ca615b46c3afe9c860d87c6518b288e46fd9bf5bde55b"
-dependencies = [
- "mutability_marker",
 ]
 
 [[package]]
@@ -612,7 +597,6 @@ dependencies = [
  "example_host_system",
  "geese",
  "serde",
- "sync_rw_cell",
  "thiserror",
  "wasm_runtime_layer",
  "wasmi",
