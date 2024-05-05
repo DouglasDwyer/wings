@@ -70,9 +70,15 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
         }
 
         const _: () = {
+            #[allow(unused)]
             #[no_mangle]
             unsafe extern "C" fn #export_function_identifier () -> ::wings::marshal::GuestPointer {
-                let descriptor = ::wings::marshal::SystemDescriptor::new::< #name >();
+                let mut descriptor = ::wings::marshal::SystemDescriptor::new::< #name >();
+                
+                #(
+                    descriptor.add_trait::< dyn #system_traits >();
+                )*
+
                 ::wings::marshal::write_to_marshal_buffer(&descriptor)
             }
         };
@@ -179,7 +185,7 @@ pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenS
         const _: () = {
             #[no_mangle]
             unsafe extern "C" fn #instantiate_id () -> ::wings::marshal::GuestPointer {
-                let descriptor = ::wings::marshal::ModuleDescriptor {
+                let descriptor = ::wings::marshal::InstantiateGroup {
                     group_ty: <#group_path as ::wings::ExportType>::TYPE.into(),
                     systems: vec!( #( <#system_paths as ::wings::ExportType>::TYPE.into() , )* )
                 };

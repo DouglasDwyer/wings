@@ -7,6 +7,7 @@ use serde::de::*;
 use std::any::*;
 use std::marker::*;
 use sync_rw_cell::*;
+use thiserror::*;
 pub use wings_macro::*;
 
 mod exported_type;
@@ -133,10 +134,15 @@ pub struct SystemRef<'a, M: Mutability, S: ExportSystem + ?Sized> {
     inner: 
 } */
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum WingsError {
+    #[error("There was a cyclic dependency between systems")]
+    CyclicDependency(),
+    #[error("A function call was invalid")]
     InvalidFunction(),
+    #[error("The module was invalid: {0}")]
     InvalidModule(String),
+    #[error("An error occurred during boundary serialization: {0}")]
     Serialization(bincode::Error)
 }
 

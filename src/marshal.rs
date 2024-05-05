@@ -32,7 +32,7 @@ impl<T> From<*mut T> for GuestPointer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ModuleDescriptor {
+pub struct InstantiateGroup {
     pub group_ty: ExportedType,
     pub systems: Vec<ExportedType>
 }
@@ -42,8 +42,8 @@ pub struct SystemDescriptor {
     pub ty: ExportedType,
     pub new_fn: GuestPointer,
     pub drop_fn: GuestPointer,
-    // todo: exported interfaces. What data will I need?
     pub dependencies: Vec<ExportedType>,
+    pub traits: Vec<SystemTraitDescriptor>
 }
 
 impl SystemDescriptor {
@@ -52,14 +52,25 @@ impl SystemDescriptor {
         let new_fn = (S::new as *const ()).into();
         let drop_fn = std::ptr::null_mut::<u8>().into();
         let dependencies = S::DEPENDENCIES.inner.into_iter().map(|x| x.system_trait.into()).collect();
+        let traits = Vec::new();
 
         SystemDescriptor {
             ty,
             new_fn,
             drop_fn,
-            dependencies
+            dependencies,
+            traits
         }
     }
+
+    pub fn add_trait<S: SystemTrait + ?Sized>(&mut self) {
+        self.traits.push(SystemTraitDescriptor { ty: S::TYPE.into() });
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SystemTraitDescriptor {
+    pub ty: ExportedType
 }
 
 pub trait Proxyable {
@@ -339,7 +350,14 @@ unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     buffer.as_mut_ptr().into()
 }
 
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_func(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
+    func(arg)
+}
+
 extern "C" {
     pub fn __wings_invoke_proxy_function(id: u32, func_index: u32, pointer: GuestPointer, size: u32);
     pub fn __wings_raise_event(pointer: GuestPointer, size: u32);
+    pub fn __wings_dbg(val: u32);
 }

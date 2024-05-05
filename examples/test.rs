@@ -7,7 +7,7 @@ pub struct TestHost;
 impl Host for TestHost {
     const EVENTS: Events<Self> = events()
         .with::<example_host_system::on::ExampleEvent>();
-    
+
     const SYSTEMS: Systems<Self> = systems()
         .with::<ExampleSystemImpl, dyn ExampleSystem>();
 
@@ -24,10 +24,12 @@ pub struct ExampleSystemImpl {
 
 impl ExampleSystem for ExampleSystemImpl {
     fn get_value(&self) -> u32 {
+        println!("getit");
         self.value
     }
 
     fn set_and_double(&mut self, value: &mut u32) {
+        println!("setit");
         self.value = *value;
         *value *= 2;
     }
@@ -52,7 +54,11 @@ fn main() {
     ctx.flush()
         .with(geese::notify::add_system::<WingsHost<TestHost>>());
 
-    let mut host = ctx.get::<WingsHost<TestHost>>();
-    let module = host.load(&include_bytes!("../target/wasm32-unknown-unknown/debug/example_plugin.wasm")[..]);
-    println!("GOT {module:?}");
+    let mut host = ctx.get_mut::<WingsHost<TestHost>>();
+    let module = host.load(&include_bytes!("../target/wasm32-unknown-unknown/debug/example_plugin.wasm")[..]).unwrap();
+    
+    let mut image = WingsImage::default();
+    image.add::<example_host_system::Client>(&module);
+
+    host.instantiate(&image).unwrap();
 }

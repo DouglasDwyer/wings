@@ -9,9 +9,9 @@ instantiate_systems!(Client, [
 pub trait ThePublic {}
 
 #[system_trait]
-pub trait BhePublic {}
+pub trait TheSkunk {}
 
-#[export_system(ThePublic, BhePublic)]
+#[export_system(ThePublic)]
 pub struct Crunk {
     ctx: WingsContextHandle<Self>
 }
@@ -27,18 +27,31 @@ impl Crunk {
 }
 
 impl ThePublic for Crunk {}
-impl BhePublic for Crunk {}
 
 impl WingsSystem for Crunk {
     const DEPENDENCIES: Dependencies = dependencies()
-        .with::<dyn ExampleSystem>();
+        .with::<dyn ExampleSystem>()
+        .with::<dyn TheSkunk>();
 
     const EVENT_HANDLERS: EventHandlers<Self> = event_handlers()
         .with(Self::handle_event);
 
     fn new(ctx: WingsContextHandle<Self>) -> Self {
+        unsafe { wings::marshal::__wings_dbg(2); }
         Self {
             ctx
         }
+    }
+}
+
+#[export_system(TheSkunk)]
+pub struct Skunk;
+
+impl TheSkunk for Skunk {}
+
+impl WingsSystem for Skunk {
+    fn new(_: WingsContextHandle<Self>) -> Self {
+        unsafe { wings::marshal::__wings_dbg(1); }
+        Self
     }
 }
