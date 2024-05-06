@@ -81,7 +81,7 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
 
                     descriptor.add_trait::< #name, dyn #system_traits >(
                         v_table,
-                        |system, func_index, buffer| ::wings::marshal::Proxyable::invoke(&mut *(*system).borrow_mut(), func_index, buffer).expect("Failed to call proxy function"));
+                        |system, func_index, buffer| ::wings::marshal::Proxyable::invoke(&mut *(*system.cast::<::std::cell::RefCell<dyn #system_traits>>()).borrow_mut(), func_index, buffer).expect("Failed to call proxy function"));
                 )*
 
                 ::wings::marshal::write_to_marshal_buffer(&descriptor)

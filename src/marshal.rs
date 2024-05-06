@@ -127,7 +127,7 @@ impl SystemDescriptor {
         }
     }
 
-    pub fn add_trait<S: WingsSystem, W: SystemTrait + ?Sized>(&mut self, v_table: GuestPointer, invoke: unsafe fn(*mut RefCell<W>, u32, *mut Vec<u8>)) {
+    pub fn add_trait<S: WingsSystem, W: SystemTrait + ?Sized>(&mut self, v_table: GuestPointer, invoke: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>)) {
         self.traits.push(SystemTraitDescriptor {
             invoke: GuestPointer::from(invoke as *const ()),
             ty: W::TYPE.into(),
@@ -405,7 +405,6 @@ impl<'a> SectionedBufferReader<'a> {
 
     pub fn section(&mut self) -> Result<&[u8], WingsError> {
         if self.buffer.len() < size_of::<u32>() {
-            unsafe { crate::marshal::__wings_dbg(2000 + self.buffer.len() as u32); }
             Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
         }
         else {
@@ -413,7 +412,6 @@ impl<'a> SectionedBufferReader<'a> {
             len_bytes.copy_from_slice(&self.buffer[0..size_of::<u32>()]);
             let len = u32::from_le_bytes(len_bytes) as usize;
             if self.buffer.len() < size_of::<u32>() + len {
-                unsafe { crate::marshal::__wings_dbg(1000 + len as u32); }
                 Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
             }
             else {
@@ -449,6 +447,13 @@ unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
 #[no_mangle]
 unsafe extern "C" fn __wings_invoke_func(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
     func(arg)
+}
+
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_proxy_func(func: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>), pointer: FatGuestPointer, func_index: u32) -> u32 {
+    func(pointer, func_index, &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER));
+    (*std::ptr::addr_of_mut!(MARSHAL_BUFFER)).len() as u32
 }
 
 extern "C" {

@@ -186,7 +186,12 @@ impl<H: Host> WingsHost<H> {
         let sorted_dependencies = self.sort_image_dependencies(image)?;
         let trait_map = self.fill_system_traits(image, &sorted_dependencies)?;
         self.instantiate_modules(image)?;
-        self.instantiate_systems(image, &sorted_dependencies, &trait_map)?;
+        
+        if let Err(error) = self.instantiate_systems(image, &sorted_dependencies, &trait_map) {
+            self.store.as_ref().expect("Failed to get store").data().ctx.raise_event(on::Error { error });
+            self.reset_store();
+        }
+
         Ok(())
     }
 
@@ -281,7 +286,7 @@ impl<H: Host> WingsHost<H> {
             let descriptor = &image.modules[entry.module_id as usize].0.metadata.system_descriptors[entry.system_id as usize];
             for system_trait in &descriptor.traits {
                 let id = data.system_traits.len() as u32;
-                data.system_traits.push(SystemTraitHolder::Guest { system: entry.module_id, v_table: system_trait.v_table });
+                data.system_traits.push(SystemTraitHolder::Guest { invoke: system_trait.invoke, system: entry.module_id, v_table: system_trait.v_table });
                 if trait_map.insert(DisjointExportedType::from(&system_trait.ty), id).is_some() {
                     return Err(WingsError::from_invalid_module("Duplicate trait implementations"));
                 }
@@ -316,7 +321,7 @@ impl<H: Host> WingsHost<H> {
             for dependency in &descriptor.dependencies {
                 let Some(index) = trait_map.get(&dependency.into()) else { return Err(WingsError::from_invalid_module("Missing dependency")) };
                 dependencies.push(match store.data().system_traits[*index as usize] {
-                    SystemTraitHolder::Guest { system, v_table } => {
+                    SystemTraitHolder::Guest { system, v_table, .. } => {
                         let system = &store.data().systems[system as usize];
                         if system.instance == entry.module_id {
                             DependencyReference::Local(FatGuestPointer::new(system.pointer, v_table))
@@ -390,6 +395,7 @@ impl<H: Host> WingsHost<H> {
 
     fn reset_store(&mut self) {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
+        data.ctx.raise_event(on::ImageReloaded);
         data.memories.clear();
         data.systems.clear();
         data.system_traits.clear();
@@ -446,7 +452,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
-    fn create_host_imports<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Imports {
+    fn create_host_imports<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Imports {
         let mut imports = Imports::new();
         imports.define("env", "__wings_invoke_proxy_function", Extern::Func(Self::create_invoke_proxy_func(&mut ctx, index)));
         imports.define("env", "__wings_raise_event", Extern::Func(Self::create_raise_event_func(&mut ctx, index)));
@@ -477,7 +483,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
-    fn create_invoke_proxy_func<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Func {
+    fn create_invoke_proxy_func<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Func {
         Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| unsafe {
             let [Value::I32(id), Value::I32(func_index), Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
@@ -488,15 +494,15 @@ impl<H: Host> WingsHost<H> {
 
             let system_index = *id as usize;
             let data = ctx.data_mut();
-            match data.system_traits.get(*id as usize) {
-                Some(SystemTraitHolder::Host { invoker }) => (data.invokers[*invoker as usize].invoke)(&mut data.ctx, *func_index as u32, &mut buffer)?,
-                Some(SystemTraitHolder::Guest { system, v_table }) => todo!("nyi"),
+            match data.system_traits.get(*id as usize).copied() {
+                Some(SystemTraitHolder::Host { invoker }) => (data.invokers[invoker as usize].invoke)(&mut data.ctx, *func_index as u32, &mut buffer)?,
+                Some(SystemTraitHolder::Guest { invoke, system, v_table }) => Self::invoke_guest_proxy(&mut ctx, *func_index as u32, system, invoke, v_table, &mut buffer)?,
                 None => anyhow::bail!("Invalid system trait index"),
             }
 
             let mut result = [Value::I32(0)];
             let alloc_marshal_buffer = ctx.data().instance_funcs[index].alloc_marshal_buffer.clone();
-            alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
+            alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result)?;
             let [Value::I32(pointer)] = result else { unreachable!() };
             memory.write(&mut ctx, pointer as usize, &buffer)?;
 
@@ -532,11 +538,14 @@ impl<H: Host> WingsHost<H> {
         let alloc_marshal_buffer = Self::get_instance_func(
             &mut ctx, instance, "__wings_alloc_marshal_buffer", FuncType::new([ValueType::I32], [ValueType::I32]))?;
         let invoke_func = Self::get_instance_func(
-            &mut ctx, instance, "__wings_invoke_func", FuncType::new([ValueType::I32, ValueType::I32], [ValueType::I32]))?;
+            &mut ctx, instance, "__wings_invoke_func", FuncType::new([ValueType::I32; 2], [ValueType::I32]))?;
+        let invoke_proxy_func = Self::get_instance_func(
+            &mut ctx, instance, "__wings_invoke_proxy_func", FuncType::new([ValueType::I32; 4], [ValueType::I32]))?;
 
         Ok(InstanceFuncs {
             alloc_marshal_buffer,
-            invoke_func
+            invoke_func,
+            invoke_proxy_func
         })
     }
 
@@ -549,6 +558,36 @@ impl<H: Host> WingsHost<H> {
         }
         else {
             Err(WingsError::from_invalid_module(format_args!("Module intrinsic {name} had invalid signature")))
+        }
+    }
+
+    fn invoke_guest_proxy(mut ctx: &mut StoreContextMut<WingsHostInner<H>, H::Engine>, func_index: u32, system: u32, invoke: GuestPointer, v_table: GuestPointer, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
+        unsafe {
+            let Some(system) = ctx.data().systems.get(system as usize).copied() else { return Err(WingsError::from_trap("Invalid system ID")) };
+            let mut result = [Value::I32(0)];
+    
+            let index = system.instance as usize;
+            let instance_funcs = ctx.data().instance_funcs[index].clone();
+            let memory = ctx.data().memories[index].clone();
+    
+            let mut result = [Value::I32(0)];
+            instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
+            let [Value::I32(pointer)] = result else { unreachable!() };
+            memory.write(&mut ctx, pointer as usize, &buffer).map_err(WingsError::from_trap)?;
+    
+            instance_funcs.invoke_proxy_func.call(&mut ctx, &[Value::I32(invoke.into()), Value::I32(system.pointer.into()), Value::I32(v_table.into()), Value::I32(func_index as i32)], &mut result).map_err(WingsError::from_trap)?;
+            let [Value::I32(size)] = result else { unreachable!() };
+    
+            instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(size)], &mut result).map_err(WingsError::from_trap)?;
+            let [Value::I32(pointer)] = result else { unreachable!() };
+    
+            let len: usize = size as usize;
+            buffer.clear();
+            buffer.reserve(len);
+            buffer.set_len(len);
+            memory.read(&mut ctx, pointer as usize, buffer).map_err(WingsError::from_trap)?;
+    
+            Ok(())
         }
     }
 
@@ -627,7 +666,8 @@ impl<H: Host> Clone for HostSystemTrait<H> {
 #[derive(Clone, Debug)]
 struct InstanceFuncs {
     pub alloc_marshal_buffer: Func,
-    pub invoke_func: Func
+    pub invoke_func: Func,
+    pub invoke_proxy_func: Func
 }
 
 struct MetadataFunctions {
@@ -648,7 +688,7 @@ struct SystemEntry {
     pub version: Version
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 struct SystemHolder {
     pub instance: u32,
     pub pointer: GuestPointer,
@@ -656,10 +696,11 @@ struct SystemHolder {
     pub dropped: bool
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 enum SystemTraitHolder {
     Guest {
         system: u32,
+        invoke: GuestPointer,
         v_table: GuestPointer
     },
     Host {
@@ -699,9 +740,17 @@ extern "C" fn __wings_dbg(x: u32) {
     unreachable!()
 }
 
-mod on {
+pub mod on {
+    use super::*;
+
+    pub struct Error {
+        pub error: WingsError
+    }
+
+    pub struct ImageReloaded;
+
     #[derive(Debug)]
-    pub struct GuestEvent {
+    pub(crate) struct GuestEvent {
         pub data: Vec<u8>
     }
 }

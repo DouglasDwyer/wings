@@ -180,9 +180,9 @@ pub enum WingsError {
     InvalidFunction(),
     #[error("The module was invalid: {0}")]
     InvalidModule(String),
-    #[error("An error occurred during boundary serialization: {0}")]
+    #[error("{0}")]
     Serialization(bincode::Error),
-    #[error("An error occurred during WASM execution: {0}")]
+    #[error("{0}")]
     Trap(String)
 }
 
