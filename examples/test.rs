@@ -14,13 +14,23 @@ impl Host for TestHost {
 
     type Engine = wasmi::Engine;
 
-    fn create_engine() -> Self::Engine {
+    fn create_engine(_: &mut GeeseContextHandle<WingsHost<Self>>) -> Self::Engine {
         wasmi::Engine::new(&wasmi::Config::default())
     }
 }
 
 pub struct ExampleSystemImpl {
     value: u32
+}
+
+impl ExampleSystemImpl {
+    fn handle_error(&mut self, event: &wings_host::on::Error) {
+        println!("Error occurred: {}", event.error);
+    }
+
+    fn on_example_event(&mut self, event: &example_host_system::on::ExampleEvent) {
+        println!("Raised !! {}", event.value);
+    }
 }
 
 impl ExampleSystem for ExampleSystemImpl {
@@ -47,6 +57,10 @@ impl AsMut<dyn ExampleSystem> for ExampleSystemImpl {
 }
 
 impl GeeseSystem for ExampleSystemImpl {
+    const EVENT_HANDLERS: EventHandlers<Self> = event_handlers()
+        .with(Self::handle_error)
+        .with(Self::on_example_event);
+
     fn new(_: GeeseContextHandle<Self>) -> Self {
         Self {
             value: 0
@@ -66,4 +80,7 @@ fn main() {
     image.add::<example_host_system::Client>(&module);
 
     host.instantiate(&image).unwrap();
+
+    drop(host);
+    ctx.flush();
 }

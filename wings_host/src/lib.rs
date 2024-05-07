@@ -188,7 +188,7 @@ impl<H: Host> WingsHost<H> {
         self.instantiate_modules(image)?;
         
         if let Err(error) = self.instantiate_systems(image, &sorted_dependencies, &trait_map) {
-            self.store.as_ref().expect("Failed to get store").data().ctx.raise_event(on::Error { error });
+            self.store.as_ref().expect("Failed to get store").data().ctx.as_ref().expect("Failed to get context").raise_event(on::Error { error });
             self.reset_store();
         }
 
@@ -395,7 +395,7 @@ impl<H: Host> WingsHost<H> {
 
     fn reset_store(&mut self) {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
-        data.ctx.raise_event(on::ImageReloaded);
+        data.ctx.as_ref().expect("Failed to get context").raise_event(on::ImageReloaded);
         data.memories.clear();
         data.systems.clear();
         data.system_traits.clear();
@@ -453,7 +453,10 @@ impl<H: Host> WingsHost<H> {
     }
 
     fn create_host_imports<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Imports {
-        let mut imports = Imports::new();
+        let mut ctx_handle = take(&mut ctx.as_context_mut().data_mut().ctx).expect("Failed to get context");
+        let mut imports = H::create_imports(&mut ctx_handle, &mut ctx);
+        ctx.as_context_mut().data_mut().ctx = Some(ctx_handle);
+
         imports.define("env", "__wings_invoke_proxy_function", Extern::Func(Self::create_invoke_proxy_func(&mut ctx, index)));
         imports.define("env", "__wings_raise_event", Extern::Func(Self::create_raise_event_func(&mut ctx, index)));
 
@@ -473,7 +476,7 @@ impl<H: Host> WingsHost<H> {
         let system_traits = Vec::new();
 
         WingsHostInner {
-            ctx,
+            ctx: Some(ctx),
             event_raisers,
             instance_funcs,
             invokers,
@@ -495,7 +498,7 @@ impl<H: Host> WingsHost<H> {
             let system_index = *id as usize;
             let data = ctx.data_mut();
             match data.system_traits.get(*id as usize).copied() {
-                Some(SystemTraitHolder::Host { invoker }) => (data.invokers[invoker as usize].invoke)(&mut data.ctx, *func_index as u32, &mut buffer)?,
+                Some(SystemTraitHolder::Host { invoker }) => (data.invokers[invoker as usize].invoke)(data.ctx.as_mut().expect("Failed to get context"), *func_index as u32, &mut buffer)?,
                 Some(SystemTraitHolder::Guest { invoke, system, v_table }) => Self::invoke_guest_proxy(&mut ctx, *func_index as u32, system, invoke, v_table, &mut buffer)?,
                 None => anyhow::bail!("Invalid system trait index"),
             }
@@ -511,23 +514,23 @@ impl<H: Host> WingsHost<H> {
     }
 
     fn create_raise_event_func<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Func {
-        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], []), move |mut ctx, params, _| {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], []), move |mut ctx, params, _| unsafe {
             let [Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
             let mut buffer = Vec::with_capacity(len);
+            buffer.set_len(len);
             let memory = ctx.data().memories[index].clone();
             memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
 
             let mut section_reader = SectionedBufferReader::new(&buffer);
             let ty = bincode::deserialize::<ExportedType>(section_reader.section()?)?;
-            
             let inner = ctx.data_mut();
             if let Some(raiser) = inner.event_raisers.get(&ty.into()) {
-                raiser(&mut inner.ctx, section_reader.section()?)?;
+                raiser(inner.ctx.as_mut().expect("Failed to get context"), section_reader.section()?)?;
             }
             else {
                 drop(section_reader);
-                inner.ctx.raise_event(on::GuestEvent { data: buffer });
+                inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer });
             }
 
             Ok(())
@@ -592,11 +595,26 @@ impl<H: Host> WingsHost<H> {
     }
 
     fn dispatch_event<T: wings::ExportType + Serialize + DeserializeOwned>(&mut self, event: &T) {
-        todo!("Dispatch it")
+        let mut buffer = Vec::new();
+        let mut section_writer = SectionedBufferWriter::new(&mut buffer);
+        bincode::serialize_into(section_writer.section(), &T::TYPE).expect("Failed to serialize event type.");
+        bincode::serialize_into(section_writer.section(), &event).expect("Failed to serialize event.");
+        drop(section_writer);
+        self.dispatch_raw_event(&buffer);
     }
 
     fn dispatch_guest_event(&mut self, event: &on::GuestEvent) {
+        self.dispatch_raw_event(&event.buffer);
+    }
 
+    fn dispatch_raw_event(&mut self, buffer: &[u8]) {
+        println!("Dispatch raw");
+        // Add: ability to alloc/deserialize event in guest
+        // Go through each guest event handler of relevant type.
+        // If the event hasn't been lowered to instance, then alloc/lower
+        // Call event handler(s)
+        // continue
+        // Add: ability to dealloc event in guest. Dealloc all at end
     }
 
     fn get_event_raisers() -> FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>> {
@@ -611,10 +629,13 @@ impl<H: Host> WingsHost<H> {
 impl<H: Host> GeeseSystem for WingsHost<H> {
     const DEPENDENCIES: geese::Dependencies = H::SYSTEMS.dependencies;
 
-    fn new(ctx: GeeseContextHandle<Self>) -> Self {
+    const EVENT_HANDLERS: geese::EventHandlers<Self> = H::EVENTS.event_handlers
+        .with(Self::dispatch_guest_event);
+
+    fn new(mut ctx: GeeseContextHandle<Self>) -> Self {
         const UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
-        let engine = Engine::new(H::create_engine());
+        let engine = Engine::new(H::create_engine(&mut ctx));
         let id = UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
         let store = Some(wasm_runtime_layer::Store::new(&engine, Self::create_host_inner(ctx)));
 
@@ -632,7 +653,12 @@ pub trait Host: 'static + Sized {
 
     type Engine: wasm_runtime_layer::backend::WasmEngine;
 
-    fn create_engine() -> Self::Engine;
+    fn create_engine(ctx: &mut GeeseContextHandle<WingsHost<Self>>) -> Self::Engine;
+
+    #[allow(unused)]
+    fn create_imports(ctx: &mut GeeseContextHandle<WingsHost<Self>>, store: impl AsContextMut) -> Imports {
+        Imports::new()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -709,7 +735,7 @@ enum SystemTraitHolder {
 }
 
 struct WingsHostInner<H: Host> {
-    ctx: GeeseContextHandle<WingsHost<H>>,
+    ctx: Option<GeeseContextHandle<WingsHost<H>>>,
     event_raisers: FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>>,
     instance_funcs: Vec<InstanceFuncs>,
     invokers: Vec<HostSystemTrait<H>>,
@@ -751,7 +777,7 @@ pub mod on {
 
     #[derive(Debug)]
     pub(crate) struct GuestEvent {
-        pub data: Vec<u8>
+        pub buffer: Vec<u8>
     }
 }
 

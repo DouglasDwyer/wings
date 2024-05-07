@@ -91,6 +91,12 @@ impl<T: ?Sized> From<*mut T> for FatGuestPointer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EventHandlers {
+    pub ty: DisjointExportedType,
+    pub handlers: Vec<GuestPointer>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstantiateGroup {
     pub group_ty: ExportedType,
     pub systems: Vec<ExportedType>
@@ -107,6 +113,7 @@ pub struct SystemDescriptor {
     pub new_fn: GuestPointer,
     pub drop_fn: GuestPointer,
     pub dependencies: Vec<ExportedType>,
+    pub event_handlers: Vec<EventHandlers>,
     pub traits: Vec<SystemTraitDescriptor>
 }
 
@@ -123,6 +130,7 @@ impl SystemDescriptor {
             new_fn,
             drop_fn,
             dependencies,
+            event_handlers: Vec::new(),
             traits
         }
     }

@@ -14,5 +14,7 @@ pub mod on {
     use super::*;
 
     #[export_type]
-    pub struct ExampleEvent;
+    pub struct ExampleEvent {
+        pub value: u32
+    }
 }

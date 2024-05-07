@@ -7,6 +7,7 @@ use serde::de::*;
 use std::any::*;
 use std::cell::*;
 use std::marker::*;
+use std::mem::*;
 use std::ops::*;
 use std::rc::*;
 use thiserror::*;
@@ -15,6 +16,7 @@ pub use wings_macro::*;
 mod exported_type;
 pub mod marshal;
 
+#[derive(Copy, Clone, Debug)]
 pub struct Dependencies {
     /// The inner list of dependencies.
     inner: ConstList<'static, DependencyType>,
@@ -62,7 +64,12 @@ impl<S: WingsSystem> EventHandlers<S> {
     
     /// Adds the given event handler to the list, returning the modified list.
     pub const fn with<Q: MutableRef<S>, T: ExportEvent>(&'static self, handler: fn(Q, &T)) -> Self {
-        todo!()
+        /*unsafe {
+            Self {
+                inner: self.inner.push(EventHandler { ty: T::TYPE, handler: transmute(handler), deserializer: Self::deserialize_and_call::<T> })
+            }
+        }*/
+        Self::new()
     }
 }
 
@@ -170,6 +177,32 @@ impl<'a, S: ?Sized> DerefMut for SystemRefMut<'a, S> {
 enum DependencyHolder {
     Local(FatGuestPointer),
     Remote(Box<dyn Any>)
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DependencyType {
+    pub exported_system: StaticExportedType,
+    pub system_trait: StaticExportedType,
+    pub ty: fn() -> TypeId,
+    pub proxy_func: fn(u32) -> Box<dyn Any>
+}
+
+impl DependencyType {
+    pub const fn new<T: SystemTrait + ?Sized>() -> Self {
+        Self {
+            exported_system: T::SYSTEM_TYPE,
+            system_trait: T::TYPE,
+            ty: TypeId::of::<T>,
+            proxy_func: |x| Box::new(RefCell::new(T::create_proxy(x)))
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct EventHandler {
+    pub ty: StaticExportedType,
+    pub handler: fn(*mut (), *const ()),
+    pub deserializer: unsafe fn()
 }
 
 #[derive(Debug, Error)]

@@ -25,7 +25,7 @@ impl From<StaticExportedType> for ExportedType {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisjointExportedType {
     pub name: String,
     pub version: DisjointVersion
@@ -49,7 +49,7 @@ impl From<&ExportedType> for DisjointExportedType {
     }
 }
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DisjointVersion {
     pub major: u32,
     pub minor: u32
@@ -75,22 +75,4 @@ pub struct Version {
     pub major: u32,
     pub minor: u32,
     pub patch: u32
-}
-
-pub struct DependencyType {
-    pub exported_system: StaticExportedType,
-    pub system_trait: StaticExportedType,
-    pub ty: fn() -> TypeId,
-    pub proxy_func: fn(u32) -> Box<dyn Any>
-}
-
-impl DependencyType {
-    pub const fn new<T: SystemTrait + ?Sized>() -> Self {
-        Self {
-            exported_system: T::SYSTEM_TYPE,
-            system_trait: T::TYPE,
-            ty: TypeId::of::<T>,
-            proxy_func: |x| Box::new(RefCell::new(T::create_proxy(x)))
-        }
-    }
 }
