@@ -44,6 +44,20 @@ impl<H: Host> Events<H> {
     }
 }
 
+impl<H: Host> Copy for Events<H> {}
+
+impl<H: Host> Clone for Events<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H: Host> std::fmt::Debug for Events<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Events").finish()
+    }
+}
+
 /// Creates a new, empty set of host events.
 pub const fn events<H: Host>() -> Events<H> {
     Events {
@@ -68,7 +82,20 @@ impl<H: Host> Systems<H> {
             traits: self.traits.push(traits.inner)
         }
     }
+}
 
+impl<H: Host> Copy for Systems<H> {}
+
+impl<H: Host> Clone for Systems<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H: Host> std::fmt::Debug for Systems<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Systems").finish()
+    }
 }
 
 /// Creates a new, empty set of host systems.
@@ -99,6 +126,20 @@ impl<H: Host, S: GeeseSystem> Traits<H, S> {
     /// Performs a proxy invocation on the system via the given trait.
     unsafe fn invoke<T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError> where S: AsMut<T> {
         ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
+    }
+}
+
+impl<H: Host, S: GeeseSystem> Copy for Traits<H, S> {}
+
+impl<H: Host, S: GeeseSystem> Clone for Traits<H, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H: Host, S: GeeseSystem> std::fmt::Debug for Traits<H, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Traits").finish()
     }
 }
 
@@ -773,6 +814,12 @@ impl<H: Host> WingsHost<H> {
     }
 }
 
+impl<H: Host> std::fmt::Debug for WingsHost<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("WingsHost").field(&self.id).finish()
+    }
+}
+
 impl<H: Host> Drop for WingsHost<H> {
     fn drop(&mut self) {
         if let Err(error) = self.clear_image() {
@@ -833,6 +880,14 @@ struct HostEventRaiser<H: Host> {
     pub ty: StaticExportedType,
     /// The function to use when raising the event to the host.
     pub raise: HostEventRaiserFunc<H>
+}
+
+impl<H: Host> Copy for HostEventRaiser<H> {}
+
+impl<H: Host> Clone for HostEventRaiser<H> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 /// Defines the function type used to call a proxy method on a host system from the guest.

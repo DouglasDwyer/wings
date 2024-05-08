@@ -177,6 +177,20 @@ impl<S: WingsSystem> EventHandlers<S> {
     }
 }
 
+impl<S: WingsSystem> Copy for EventHandlers<S> {}
+
+impl<S: WingsSystem> Clone for EventHandlers<S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S: WingsSystem> std::fmt::Debug for EventHandlers<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventHandlers").finish()
+    }
+}
+
 /// Creates a new, empty list of event handlers.
 #[inline(always)]
 pub const fn event_handlers<S: WingsSystem>() -> EventHandlers<S> {
@@ -237,6 +251,12 @@ impl<S: WingsSystem> WingsContextHandle<S> {
     }
 }
 
+impl<S: WingsSystem> std::fmt::Debug for WingsContextHandle<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("WingsContextHandle").finish()
+    }
+}
+
 /// Represents a collection of event handlers with internal state.
 pub trait WingsSystem: ExportType + Sized {
     /// The set of dependencies that this system has.
@@ -250,6 +270,7 @@ pub trait WingsSystem: ExportType + Sized {
 }
 
 /// Represents an immutable reference to a system.
+#[derive(Debug)]
 pub struct SystemRef<'a, S: ?Sized> {
     /// The inner reference.
     inner: Ref<'a, S>
@@ -264,6 +285,7 @@ impl<'a, S: ?Sized> Deref for SystemRef<'a, S> {
 }
 
 /// Represents a mutable reference to a system.
+#[derive(Debug)]
 pub struct SystemRefMut<'a, S: ?Sized> {
     /// The inner reference.
     inner: RefMut<'a, S>
@@ -335,6 +357,7 @@ impl EventObject {
 }
 
 /// Describes an event handler that should be registered with the host.
+#[derive(Copy, Clone, Debug)]
 struct StaticEventHandler {
     /// The type of the event to process.
     pub ty: StaticExportedType,
