@@ -19,13 +19,13 @@ pub struct Crunk {
 }
 
 impl Crunk {
-    fn handle_event(&mut self, _: &example_host_system::on::ExampleEvent) {
+    fn handle_event(&mut self, event: &example_host_system::on::ExampleEvent) {
         //let mut test = self.ctx.get_mut::<dyn ExampleSystem>();
         //let mut x = 2;
         //test.set_and_double(&mut x);
         //x = test.get_value() / 2;
         //test.set_and_double(&mut x);
-        unsafe { wings::marshal::__wings_dbg(69420); }
+        unsafe { wings::marshal::__wings_dbg(69420 + event.value); }
     }
 }
 
@@ -50,6 +50,12 @@ impl WingsSystem for Crunk {
         Self {
             ctx
         }
+    }
+}
+
+impl Drop for Crunk {
+    fn drop(&mut self) {
+        self.ctx.get::<dyn ExampleSystem>().print(&format!("oops drop it"));
     }
 }
 

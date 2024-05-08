@@ -181,18 +181,11 @@ impl<H: Host> WingsHost<H> {
         })))
     }
 
-    pub fn instantiate(&mut self, image: &WingsImage) -> Result<(), WingsError> {
-        self.reset_store();
-        let sorted_dependencies = self.sort_image_dependencies(image)?;
-        let trait_map = self.fill_system_traits(image, &sorted_dependencies)?;
-        self.instantiate_modules(image)?;
-        
-        if let Err(error) = self.instantiate_systems(image, &sorted_dependencies, &trait_map) {
-            self.store.as_ref().expect("Failed to get store").data().ctx.as_ref().expect("Failed to get context").raise_event(on::Error { error });
-            self.reset_store();
+    pub fn instantiate(&mut self, image: &WingsImage) {
+        self.clear_image();
+        if let Err(error) = self.try_instantiate(image) {
+            self.handle_error(error);
         }
-
-        Ok(())
     }
 
     fn check_group_instantiates_duplicates(&self, group_instantiates: &[InstantiateGroup]) -> Result<(), WingsError> {
@@ -221,6 +214,24 @@ impl<H: Host> WingsHost<H> {
                 i += 1;
             }
         }
+    }
+
+    fn clear_image(&mut self) -> Result<(), WingsError> {
+        let result = self.drop_systems();
+        self.reset_store();
+        result
+    }
+
+    fn drop_systems(&mut self) -> Result<(), WingsError> {
+        let mut store = self.store.as_mut().expect("Failed to get store");
+
+        for i in (0..store.data().systems.len()).rev() {
+            let system = store.data().systems[i];
+            let invoke_func = store.data().instance_funcs[system.instance as usize].invoke_func_1.clone();
+            invoke_func.call(&mut store, &[Value::I32(system.drop_fn.into()), Value::I32(system.pointer.into())], &mut [Value::I32(0)]).map_err(WingsError::from_trap)?;
+        }
+        
+        Ok(())
     }
 
     fn load_module_metadata(&self, module: &Module) -> Result<ModuleMetadata, WingsError> {
@@ -263,6 +274,23 @@ impl<H: Host> WingsHost<H> {
             imports.define(import.module, import.name, Extern::Func(func));
         }
         Ok(imports)
+    }
+
+    fn fill_event_handlers(&mut self, image: &WingsImage, types: &[DisjointExportedType]) {
+        let mut store = self.store.as_mut().expect("Failed to get store");
+        let data = store.data_mut();
+
+        for (id, ty) in types.iter().enumerate() {
+            let entry = image.systems[ty];
+            let descriptor = &image.modules[entry.module_id as usize].0.metadata.system_descriptors[entry.system_id as usize];
+            for event_handler in &descriptor.event_handlers {
+                let event_entry = data.guest_event_handlers.entry(event_handler.ty.clone()).or_default();
+                if !event_entry.instances.contains(&entry.module_id) {
+                    event_entry.instances.push(entry.module_id);
+                }
+                event_entry.event_handlers.push(EventHandlerDescriptor { system: id as u32, event_func: event_handler.event_func, invoke_func: event_handler.invoke_func });
+            }
+        }
     }
 
     fn fill_system_traits(&mut self, image: &WingsImage, types: &[DisjointExportedType]) -> Result<FxHashMap<DisjointExportedType, u32>, WingsError> {
@@ -342,13 +370,13 @@ impl<H: Host> WingsHost<H> {
             instance_funcs.alloc_marshal_buffer.call(&mut store, &[Value::I32(dependency_data.len() as i32)], &mut result).map_err(WingsError::from_invalid_module)?;
             let [Value::I32(pointer)] = result else { unreachable!() };
             memory.write(&mut store, pointer as usize, &dependency_data).map_err(WingsError::from_invalid_module)?;
-            instance_funcs.invoke_func.call(&mut store, &[Value::I32(descriptor.new_fn.into()), Value::I32(pointer)], &mut result).map_err(WingsError::from_trap)?;
+            instance_funcs.invoke_func_1.call(&mut store, &[Value::I32(descriptor.new_func.into()), Value::I32(pointer)], &mut result).map_err(WingsError::from_trap)?;
             let [Value::I32(pointer)] = result else { unreachable!() };
             
             store.data_mut().systems.push(SystemHolder {
                 instance: entry.module_id,
                 pointer: GuestPointer::new(pointer as u32),
-                drop_fn: descriptor.drop_fn,
+                drop_fn: descriptor.drop_func,
                 dropped: false
             });
         }
@@ -396,6 +424,7 @@ impl<H: Host> WingsHost<H> {
     fn reset_store(&mut self) {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
         data.ctx.as_ref().expect("Failed to get context").raise_event(on::ImageReloaded);
+        data.guest_event_handlers.clear();
         data.memories.clear();
         data.systems.clear();
         data.system_traits.clear();
@@ -470,6 +499,7 @@ impl<H: Host> WingsHost<H> {
         let event_raisers = Self::get_event_raisers();
         let invokers = Self::get_invokers();
 
+        let guest_event_handlers = FxHashMap::default();
         let instance_funcs = Vec::new();
         let memories = Vec::new();
         let systems = Vec::new();
@@ -478,6 +508,7 @@ impl<H: Host> WingsHost<H> {
         WingsHostInner {
             ctx: Some(ctx),
             event_raisers,
+            guest_event_handlers,
             instance_funcs,
             invokers,
             systems,
@@ -523,14 +554,14 @@ impl<H: Host> WingsHost<H> {
             memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
 
             let mut section_reader = SectionedBufferReader::new(&buffer);
-            let ty = bincode::deserialize::<ExportedType>(section_reader.section()?)?;
+            let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(section_reader.section()?)?);
             let inner = ctx.data_mut();
-            if let Some(raiser) = inner.event_raisers.get(&ty.into()) {
+            if let Some(raiser) = inner.event_raisers.get(&ty) {
                 raiser(inner.ctx.as_mut().expect("Failed to get context"), section_reader.section()?)?;
             }
             else {
                 drop(section_reader);
-                inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer });
+                inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer, ty });
             }
 
             Ok(())
@@ -540,14 +571,20 @@ impl<H: Host> WingsHost<H> {
     fn get_instance_funcs<C: AsContextMut>(mut ctx: C, instance: &Instance) -> Result<InstanceFuncs, WingsError> {
         let alloc_marshal_buffer = Self::get_instance_func(
             &mut ctx, instance, "__wings_alloc_marshal_buffer", FuncType::new([ValueType::I32], [ValueType::I32]))?;
-        let invoke_func = Self::get_instance_func(
-            &mut ctx, instance, "__wings_invoke_func", FuncType::new([ValueType::I32; 2], [ValueType::I32]))?;
+        let copy_event_object = Self::get_instance_func(
+            &mut ctx, instance, "__wings_copy_event_object", FuncType::new([], []))?;
+        let invoke_func_1 = Self::get_instance_func(
+            &mut ctx, instance, "__wings_invoke_func_1", FuncType::new([ValueType::I32; 2], [ValueType::I32]))?;
+        let invoke_func_2 = Self::get_instance_func(
+            &mut ctx, instance, "__wings_invoke_func_2", FuncType::new([ValueType::I32; 3], [ValueType::I32]))?;
         let invoke_proxy_func = Self::get_instance_func(
             &mut ctx, instance, "__wings_invoke_proxy_func", FuncType::new([ValueType::I32; 4], [ValueType::I32]))?;
 
         Ok(InstanceFuncs {
             alloc_marshal_buffer,
-            invoke_func,
+            copy_event_object,
+            invoke_func_1,
+            invoke_func_2,
             invoke_proxy_func
         })
     }
@@ -562,6 +599,11 @@ impl<H: Host> WingsHost<H> {
         else {
             Err(WingsError::from_invalid_module(format_args!("Module intrinsic {name} had invalid signature")))
         }
+    }
+
+    fn handle_error(&mut self, error: WingsError) {
+        self.store.as_ref().expect("Failed to get store").data().ctx.as_ref().expect("Failed to get context").raise_event(on::Error { error });
+        self.reset_store();
     }
 
     fn invoke_guest_proxy(mut ctx: &mut StoreContextMut<WingsHostInner<H>, H::Engine>, func_index: u32, system: u32, invoke: GuestPointer, v_table: GuestPointer, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
@@ -594,27 +636,66 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    fn try_instantiate(&mut self, image: &WingsImage) -> Result<(), WingsError> {
+        let sorted_dependencies = self.sort_image_dependencies(image)?;
+        let trait_map = self.fill_system_traits(image, &sorted_dependencies)?;
+        self.fill_event_handlers(image, &sorted_dependencies);
+        self.instantiate_modules(image)?;
+        self.instantiate_systems(image, &sorted_dependencies, &trait_map)
+    }
+
     fn dispatch_event<T: wings::ExportType + Serialize + DeserializeOwned>(&mut self, event: &T) {
-        let mut buffer = Vec::new();
-        let mut section_writer = SectionedBufferWriter::new(&mut buffer);
-        bincode::serialize_into(section_writer.section(), &T::TYPE).expect("Failed to serialize event type.");
-        bincode::serialize_into(section_writer.section(), &event).expect("Failed to serialize event.");
-        drop(section_writer);
-        self.dispatch_raw_event(&buffer);
+        if let Err(error) = bincode::serialize(&event).map_err(WingsError::Serialization).and_then(|x| self.dispatch_raw_event(&ExportedType::from(T::TYPE).into(), &x)) {
+            self.handle_error(error);
+        }
     }
 
     fn dispatch_guest_event(&mut self, event: &on::GuestEvent) {
-        self.dispatch_raw_event(&event.buffer);
+        if let Err(error) = self.dispatch_raw_event(&event.ty, &event.buffer) {
+            self.handle_error(error);
+        }
     }
 
-    fn dispatch_raw_event(&mut self, buffer: &[u8]) {
-        println!("Dispatch raw");
-        // Add: ability to alloc/deserialize event in guest
-        // Go through each guest event handler of relevant type.
-        // If the event hasn't been lowered to instance, then alloc/lower
-        // Call event handler(s)
-        // continue
-        // Add: ability to dealloc event in guest. Dealloc all at end
+    fn dispatch_raw_event(&mut self, ty: &DisjointExportedType, buffer: &[u8]) -> Result<(), WingsError> {
+        if let Some(handler_list) = self.store.as_ref().expect("Failed to get store").data().guest_event_handlers.get(ty).cloned() {
+            self.lower_raw_event_buffer(&handler_list, buffer)?;
+            self.invoke_event_handlers(&handler_list)?;
+        }
+
+        Ok(())
+    }
+
+    fn lower_raw_event_buffer(&mut self, handler_list: &EventHandlerList, buffer: &[u8]) -> Result<(), WingsError> {
+        let mut store = self.store.as_mut().expect("Failed to get store");
+
+        for instance in handler_list.instances.iter().copied() {
+            let instance_funcs = &store.data().instance_funcs[instance as usize];
+            let alloc_marshal_buffer = instance_funcs.alloc_marshal_buffer.clone();
+            let copy_event_object = instance_funcs.copy_event_object.clone();
+
+            let mut result = [Value::I32(0)];
+            alloc_marshal_buffer.call(&mut store, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
+            let [Value::I32(pointer)] = result else { unreachable!() };
+
+            let memory = store.data().memories[instance as usize].clone();
+            memory.write(&mut store, pointer as usize, buffer).map_err(WingsError::from_trap)?;
+            
+            copy_event_object.call(&mut store, &[], &mut []).map_err(WingsError::from_trap)?;
+        }
+
+        Ok(())
+    }
+
+    fn invoke_event_handlers(&mut self, handler_list: &EventHandlerList) -> Result<(), WingsError> {
+        let mut store = self.store.as_mut().expect("Failed to get store");
+        
+        for handler in &handler_list.event_handlers {
+            let system = store.data().systems[handler.system as usize];
+            let invoke_func = store.data().instance_funcs[system.instance as usize].invoke_func_2.clone();
+            invoke_func.call(&mut store, &[Value::I32(handler.invoke_func.into()), Value::I32(system.pointer.into()), Value::I32(handler.event_func.into())], &mut [Value::I32(0)]).map_err(WingsError::from_trap)?;
+        }
+
+        Ok(())
     }
 
     fn get_event_raisers() -> FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>> {
@@ -623,6 +704,14 @@ impl<H: Host> WingsHost<H> {
 
     fn get_invokers() -> Vec<HostSystemTrait<H>> {
         Vec::from_iter(H::SYSTEMS.traits.iter().flat_map(|x| x.iter()).copied())
+    }
+}
+
+impl<H: Host> Drop for WingsHost<H> {
+    fn drop(&mut self) {
+        if let Err(error) = self.clear_image() {
+            self.handle_error(error);
+        }
     }
 }
 
@@ -690,9 +779,24 @@ impl<H: Host> Clone for HostSystemTrait<H> {
 }
 
 #[derive(Clone, Debug)]
+struct EventHandlerDescriptor {
+    pub system: u32,
+    pub event_func: GuestPointer,
+    pub invoke_func: GuestPointer,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EventHandlerList {
+    pub instances: Vec<u32>,
+    pub event_handlers: Vec<EventHandlerDescriptor>
+}
+
+#[derive(Clone, Debug)]
 struct InstanceFuncs {
     pub alloc_marshal_buffer: Func,
-    pub invoke_func: Func,
+    pub copy_event_object: Func,
+    pub invoke_func_1: Func,
+    pub invoke_func_2: Func,
     pub invoke_proxy_func: Func
 }
 
@@ -737,11 +841,12 @@ enum SystemTraitHolder {
 struct WingsHostInner<H: Host> {
     ctx: Option<GeeseContextHandle<WingsHost<H>>>,
     event_raisers: FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>>,
+    guest_event_handlers: FxHashMap<DisjointExportedType, EventHandlerList>,
     instance_funcs: Vec<InstanceFuncs>,
     invokers: Vec<HostSystemTrait<H>>,
+    memories: Vec<Memory>,
     systems: Vec<SystemHolder>,
     system_traits: Vec<SystemTraitHolder>,
-    memories: Vec<Memory>
 }
 
 #[derive(Debug)]
@@ -777,7 +882,8 @@ pub mod on {
 
     #[derive(Debug)]
     pub(crate) struct GuestEvent {
-        pub buffer: Vec<u8>
+        pub buffer: Vec<u8>,
+        pub ty: DisjointExportedType
     }
 }
 

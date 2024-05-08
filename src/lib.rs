@@ -47,7 +47,7 @@ pub const fn dependencies() -> Dependencies {
 
 pub struct EventHandlers<S: WingsSystem> {
     // The inner list of event handlers.
-    inner: ConstList<'static, ()>,
+    inner: ConstList<'static, StaticEventHandler>,
     /// Phantom data to mark the system as used.
     data: PhantomData<fn(S)>,
 }
@@ -64,12 +64,27 @@ impl<S: WingsSystem> EventHandlers<S> {
     
     /// Adds the given event handler to the list, returning the modified list.
     pub const fn with<Q: MutableRef<S>, T: ExportEvent>(&'static self, handler: fn(Q, &T)) -> Self {
-        /*unsafe {
+        unsafe {
             Self {
-                inner: self.inner.push(EventHandler { ty: T::TYPE, handler: transmute(handler), deserializer: Self::deserialize_and_call::<T> })
+                inner: self.inner.push(StaticEventHandler { ty: T::TYPE, invoke_func: transmute(Self::invoke_handler::<T> as *const ()), event_func: transmute(handler) }),
+                data: PhantomData
             }
-        }*/
-        Self::new()
+        }
+    }
+
+    unsafe fn invoke_handler<T: ExportEvent>(system: &mut S, handler: fn(&mut S, &T)) -> GuestPointer {
+        let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
+
+        let object = if let Some(object) = event_object.objects.iter().find(|x| x.is::<T>()) {
+            object
+        }
+        else {
+            event_object.objects.push(Box::new(bincode::deserialize::<T>(&event_object.buffer).expect("Failed to deserialize event object")));
+            event_object.objects.last().expect("Failed to get last object in event objects list")
+        };
+
+        handler(system, object.downcast_ref().unwrap());
+        GuestPointer::default()
     }
 }
 
@@ -198,11 +213,26 @@ impl DependencyType {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-struct EventHandler {
+static mut EVENT_OBJECT: EventObject = EventObject::new();
+
+struct EventObject {
+    buffer: Vec<u8>,
+    objects: Vec<Box<dyn Any>>
+}
+
+impl EventObject {
+    pub const fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            objects: Vec::new()
+        }
+    }
+}
+
+struct StaticEventHandler {
     pub ty: StaticExportedType,
-    pub handler: fn(*mut (), *const ()),
-    pub deserializer: unsafe fn()
+    pub event_func: fn(*mut (), *const ()),
+    pub invoke_func: unsafe fn(*mut (), fn(*mut (), *const ())),
 }
 
 #[derive(Debug, Error)]

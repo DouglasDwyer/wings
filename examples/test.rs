@@ -79,8 +79,8 @@ fn main() {
     let mut image = WingsImage::default();
     image.add::<example_host_system::Client>(&module);
 
-    host.instantiate(&image).unwrap();
-
+    host.instantiate(&image);
     drop(host);
+    
     ctx.flush();
 }

@@ -8,7 +8,7 @@ use std::mem::*;
 use std::ops::*;
 use std::rc::*;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct GuestPointer(u32);
 
@@ -91,9 +91,20 @@ impl<T: ?Sized> From<*mut T> for FatGuestPointer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EventHandlers {
+pub struct EventHandler {
     pub ty: DisjointExportedType,
-    pub handlers: Vec<GuestPointer>
+    pub event_func: GuestPointer,
+    pub invoke_func: GuestPointer,
+}
+
+impl From<&StaticEventHandler> for EventHandler {
+    fn from(value: &StaticEventHandler) -> Self {
+        Self {
+            ty: ExportedType::from(value.ty).into(),
+            event_func: (value.event_func as *const ()).into(),
+            invoke_func: (value.invoke_func as *const ()).into()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -110,10 +121,10 @@ pub struct InstantiateSystem {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SystemDescriptor {
     pub ty: ExportedType,
-    pub new_fn: GuestPointer,
-    pub drop_fn: GuestPointer,
+    pub new_func: GuestPointer,
+    pub drop_func: GuestPointer,
     pub dependencies: Vec<ExportedType>,
-    pub event_handlers: Vec<EventHandlers>,
+    pub event_handlers: Vec<EventHandler>,
     pub traits: Vec<SystemTraitDescriptor>
 }
 
@@ -121,16 +132,17 @@ impl SystemDescriptor {
     pub fn new<S: WingsSystem>() -> Self {
         let ty = S::TYPE.into();
         let new_fn = (Self::create_system::<S> as *const ()).into();
-        let drop_fn = std::ptr::null_mut::<u8>().into();
+        let drop_fn = (Self::drop_system::<S> as *const()).into();
         let dependencies = S::DEPENDENCIES.inner.into_iter().map(|x| x.system_trait.into()).collect();
+        let event_handlers = S::EVENT_HANDLERS.inner.into_iter().map(EventHandler::from).collect();
         let traits = Vec::new();
 
         SystemDescriptor {
             ty,
-            new_fn,
-            drop_fn,
+            new_func: new_fn,
+            drop_func: drop_fn,
             dependencies,
-            event_handlers: Vec::new(),
+            event_handlers,
             traits
         }
     }
@@ -160,6 +172,11 @@ impl SystemDescriptor {
             dependencies,
             marker: PhantomData
         }))))
+    }
+
+    unsafe fn drop_system<S: WingsSystem>(pointer: *mut RefCell<S>) -> GuestPointer {
+        drop(Box::from_raw(pointer));
+        GuestPointer::default()
     }
 }
 
@@ -451,10 +468,28 @@ unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     buffer.as_mut_ptr().into()
 }
 
+#[no_mangle]
+unsafe extern "C" fn __wings_copy_event_object() {
+    let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
+    let marshal_buffer = &*std::ptr::addr_of!(MARSHAL_BUFFER);
+    event_object.buffer.clear();
+    event_object.objects.clear();
+
+    event_object.buffer.reserve(marshal_buffer.len());
+    event_object.buffer.set_len(marshal_buffer.len());
+    event_object.buffer.copy_from_slice(&marshal_buffer);
+}
+
 #[allow(improper_ctypes_definitions)]
 #[no_mangle]
-unsafe extern "C" fn __wings_invoke_func(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
+unsafe extern "C" fn __wings_invoke_func_1(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
     func(arg)
+}
+
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_func_2(func: fn(GuestPointer, GuestPointer) -> GuestPointer, arg_0: GuestPointer, arg_1: GuestPointer) -> GuestPointer {
+    func(arg_0, arg_1)
 }
 
 #[allow(improper_ctypes_definitions)]
