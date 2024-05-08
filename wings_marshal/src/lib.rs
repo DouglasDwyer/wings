@@ -1,3 +1,8 @@
+#![deny(missing_docs)]
+#![deny(clippy::missing_docs_in_private_items)]
+
+//! Defines types to communicate between guests and the host in the `wings` plugin system.
+
 use crate::exported_type::*;
 use serde::*;
 use serde::de::*;
@@ -5,6 +10,7 @@ use std::mem::*;
 use std::ops::*;
 use thiserror::*;
 
+/// Defines structs for unique identification of types.
 pub mod exported_type;
 
 /// Represents a thin, untyped pointer in 32-bit WASM.
@@ -174,37 +180,42 @@ pub trait Proxyable {
 }
 
 /// Determines how a type will be cloned across the WASM-native barrier.
-pub trait MarshalAs<'a, T> {
+pub trait Marshal<'a> {
+    /// The type that will be created on the stack to hold this value during a marshalled call.
+    type Temporary;
+
     /// Serializes this object into the buffer.
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError>;
 
     /// Deserializes this object from the buffer.
-    fn lift_argument(buffer: &[u8]) -> Result<T, WingsError>;
+    fn lift_argument(buffer: &[u8]) -> Result<Self::Temporary, WingsError>;
 
     /// Creates a temporary copy of this type from the underlying value.
-    fn make_temporary(value: &'a mut T) -> Self;
+    fn make_temporary(value: &'a mut Self::Temporary) -> Self;
 
     /// Serializes the result object into the buffer.
-    fn lower_result(value: &T, buffer: SectionedBufferWrite) -> Result<(), WingsError>;
+    fn lower_result(value: &Self::Temporary, buffer: SectionedBufferWrite) -> Result<(), WingsError>;
     
     /// Deserializes the result object from the buffer.
     fn lift_result(&mut self, buffer: &[u8]) -> Result<(), WingsError>;
 }
 
-impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a T {
+impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a T {
+    type Temporary = T;
+
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
     }
 
-    fn lift_argument(buffer: &[u8]) -> Result<T, WingsError> {
+    fn lift_argument(buffer: &[u8]) -> Result<Self::Temporary, WingsError> {
         bincode::deserialize(buffer).map_err(WingsError::Serialization)
     }
 
-    fn make_temporary(value: &'a mut T) -> Self {
+    fn make_temporary(value: &'a mut Self::Temporary) -> Self {
         value
     }
 
-    fn lower_result(_: &T, _: SectionedBufferWrite) -> Result<(), WingsError> {
+    fn lower_result(_: &Self::Temporary, _: SectionedBufferWrite) -> Result<(), WingsError> {
         Ok(())
     }
 
@@ -213,7 +224,9 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a T {
     }
 }
 
-impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a mut T {
+impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a mut T {
+    type Temporary = T;
+
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
     }
@@ -236,20 +249,22 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, T> for &'a mut T {
     }
 }
 
-impl<'a> MarshalAs<'a, String> for &'a str {
+impl<'a> Marshal<'a> for &'a str {
+    type Temporary = String;
+
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
     }
 
-    fn lift_argument(buffer: &[u8]) -> Result<String, WingsError> {
+    fn lift_argument(buffer: &[u8]) -> Result<Self::Temporary, WingsError> {
         bincode::deserialize(buffer).map_err(WingsError::Serialization)
     }
 
-    fn make_temporary(value: &'a mut String) -> Self {
+    fn make_temporary(value: &'a mut Self::Temporary) -> Self {
         &*value
     }
 
-    fn lower_result(_: &String, _: SectionedBufferWrite) -> Result<(), WingsError> {
+    fn lower_result(_: &Self::Temporary, _: SectionedBufferWrite) -> Result<(), WingsError> {
         Ok(())
     }
 
@@ -258,20 +273,22 @@ impl<'a> MarshalAs<'a, String> for &'a str {
     }
 }
 
-impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, Vec<T>> for &'a [T] {
+impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a [T] {
+    type Temporary = Vec<T>;
+
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
     }
 
-    fn lift_argument(buffer: &[u8]) -> Result<Vec<T>, WingsError> {
+    fn lift_argument(buffer: &[u8]) -> Result<Self::Temporary, WingsError> {
         bincode::deserialize(buffer).map_err(WingsError::Serialization)
     }
 
-    fn make_temporary(value: &'a mut Vec<T>) -> Self {
+    fn make_temporary(value: &'a mut Self::Temporary) -> Self {
         &*value
     }
 
-    fn lower_result(_: &Vec<T>, _: SectionedBufferWrite) -> Result<(), WingsError> {
+    fn lower_result(_: &Self::Temporary, _: SectionedBufferWrite) -> Result<(), WingsError> {
         Ok(())
     }
 
@@ -280,20 +297,22 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, Vec<T>> for &'a [T] {
     }
 }
 
-impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, Vec<T>> for &'a mut [T] {
+impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a mut [T] {
+    type Temporary = Vec<T>;
+
     fn lower_argument(&self, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, self).map_err(WingsError::Serialization)
     }
 
-    fn lift_argument(buffer: &[u8]) -> Result<Vec<T>, WingsError> {
+    fn lift_argument(buffer: &[u8]) -> Result<Self::Temporary, WingsError> {
         bincode::deserialize(buffer).map_err(WingsError::Serialization)
     }
 
-    fn make_temporary(value: &'a mut Vec<T>) -> Self {
+    fn make_temporary(value: &'a mut Self::Temporary) -> Self {
         &mut *value
     }
 
-    fn lower_result(value: &Vec<T>, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
+    fn lower_result(value: &Self::Temporary, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, value).map_err(WingsError::Serialization)
     }
 
@@ -311,19 +330,29 @@ impl<'a, T: Serialize + DeserializeOwned> MarshalAs<'a, Vec<T>> for &'a mut [T] 
     }
 }
 
+/// Holds the serialized data for communication between guest and host.
 pub static mut MARSHAL_BUFFER: Vec<u8> = Vec::new();
 
+/// Writes to a buffer in length-delineated sections.
 pub struct SectionedBufferWriter<'a> {
+    /// The underlying buffer.
     buffer: &'a mut Vec<u8>
 }
 
 impl SectionedBufferWriter<'static> {
+    /// Creates a new writer for the marshal buffer.
+    /// 
+    /// # Safety
+    /// 
+    /// For this call to be sound, the marshal buffer must not
+    /// currently be borrowed anywhere else.
     pub unsafe fn from_marshal_buffer() -> Self {
         Self::new(&mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER))
     }
 }
 
 impl<'a> SectionedBufferWriter<'a> {
+    /// Creates a new writer.
     pub fn new(buffer: &'a mut Vec<u8>) -> Self {
         buffer.clear();
         Self {
@@ -331,21 +360,28 @@ impl<'a> SectionedBufferWriter<'a> {
         }
     }
 
+    /// Adds a section to the buffer.
     pub fn section(&mut self) -> SectionedBufferWrite {
         SectionedBufferWrite::new(self.buffer)
     }
 
+    /// Converts the writer to the underlying mutable buffer.
     pub fn into_inner(self) -> &'a mut Vec<u8> {
         self.buffer
     }
 }
 
+/// Allows for writing to a section of a buffer.
 pub struct SectionedBufferWrite<'a> {
+    /// The underlying buffer.
     buffer: &'a mut Vec<u8>,
+    /// The position at which the length should be written in the buffer
+    /// when this write completes.
     start_position: usize
 }
 
 impl<'a> SectionedBufferWrite<'a> {
+    /// Creates a new section within the given buffer.
     fn new(buffer: &'a mut Vec<u8>) -> Self {
         let start_position = buffer.len();
         buffer.extend_from_slice(&0u32.to_le_bytes());
@@ -394,23 +430,34 @@ impl<'a> std::io::Write for SectionedBufferWrite<'a> {
     }
 }
 
+/// Reads from a buffer in length-delineated sections.
 pub struct SectionedBufferReader<'a> {
+    /// The underlying buffer.
     buffer: &'a [u8]
 }
 
 impl SectionedBufferReader<'static> {
+    /// Creates a new reader for the marshal buffer.
+    /// 
+    /// # Safety
+    /// 
+    /// For this call to be sound, the marshal buffer must not
+    /// currently be borrowed anywhere else.
     pub unsafe fn from_marshal_buffer() -> Self {
         Self::new(&*std::ptr::addr_of_mut!(MARSHAL_BUFFER))
     }
 }
 
 impl<'a> SectionedBufferReader<'a> {
+    /// Creates a new reader for the given buffer.
     pub fn new(buffer: &'a [u8]) -> Self {
         Self {
             buffer
         }
     }
 
+    /// Gets the next section in the buffer, or returns an error
+    /// if the buffer was not formatted correctly.
     pub fn section(&mut self) -> Result<&[u8], WingsError> {
         if self.buffer.len() < size_of::<u32>() {
             Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
@@ -431,30 +478,44 @@ impl<'a> SectionedBufferReader<'a> {
     }
 }
 
+/// Describes an error that occurred during WASM instantiation or execution.
 #[derive(Debug, Error)]
 pub enum WingsError {
+    /// There was a cyclic dependency between systems.
     #[error("There was a cyclic dependency between systems")]
     CyclicDependency(),
+    /// A function call was invalid.
     #[error("A function call was invalid")]
     InvalidFunction(),
+    /// The module was malformatted.
     #[error("The module was invalid: {0}")]
     InvalidModule(Box<dyn std::error::Error + Send + Sync>),
+    /// A serialization error occurred.
     #[error("{0}")]
     Serialization(bincode::Error),
+    /// A WASM trap occurred.
     #[error("{0}")]
     Trap(Box<dyn std::error::Error + Send + Sync>)
 }
 
 impl WingsError {
+    /// Wraps the given error as an `InvalidModule`.
     pub fn from_invalid_module(x: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self::InvalidModule(x.into())
     }
 
+    /// Wraps the given error as a `Trap`.
     pub fn from_trap(x: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self::Trap(x.into())
     }
 }
 
+/// Serializes the given object as a single section in the marshal buffer.
+/// 
+/// # Safety
+/// 
+/// For this function call to be sound, no references may currently
+/// exist to the marshal buffer.
 pub unsafe fn write_to_marshal_buffer(x: &impl Serialize) -> GuestPointer {
     let buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
     buffer.clear();

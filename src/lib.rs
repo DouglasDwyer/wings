@@ -1,3 +1,82 @@
+#![deny(missing_docs)]
+#![deny(clippy::missing_docs_in_private_items)]
+
+//! # wings
+//! 
+//! Wings is a WASM plugin system for Rust. It integrates directly with the [Geese event library](https://github.com/DouglasDwyer/geese), allowing
+//! plugins to seamlessly communicate with one another and the host using events and systems. The following features are supported:
+//! 
+//! - *Sending events to the host*: Guests can send and receive strongly-typed events to the host, which will be injected into the host's Geese context.
+//! - *Sending events to other guest systems*: Events will propagate between guest systems and from the host's Geese context into WASM modules.
+//! - *Accessing systems of the host*: Hosts can expose Geese systems as trait objects, which can be called directly from the guest. Function arguments and return types are serialized across the WASM boundary.
+//! - *Accessing systems of other plugins*: Plugins can export their systems as trait objects, which other plugins can call. Just like regular Geese, Wings guarantees that every system is a singleton - if separate plugins are loaded that share a dependency, both plugins will access the same dependency instance.
+//! - *Automatically resolving plugin dependencies/versions*: Plugins are built as Rust crates with all transitive dependencies included, so there's no need to worry about creating a dependency resolver. Whenever Wings loads a system, it will choose the newest Semver-compatible version from the set of loaded plugins.
+//! 
+//! ### Example
+//! 
+//! The following is an abridged example of how to use Wings. The complete code may be found in the [`wings_example` folder](/wings_example/).
+//! 
+//! Wings allows for defining traits like the following, which can be shared between the code of hosts and between plugins:
+//! 
+//! ```rust
+//! // Define a system that the host will expose.
+//! // This can also be used to expose guest systems to other guest systems.
+//! #[system_trait(host)]
+//! pub trait ExampleSystem: 'static {
+//!     // Prints a value to the console.
+//!     fn print(&self, value: &str);
+//! }
+//! ```
+//! 
+//! Then, the system may be referenced as a trait object from WASM:
+//! 
+//! ```rust
+//! // Define a Wings system that will run within WASM
+//! #[export_system]
+//! pub struct PluginSystem;
+//! 
+//! impl WingsSystem for PluginSystem {
+//!     // Declare a dependency on the exported host system
+//!     const DEPENDENCIES: Dependencies = dependencies()
+//!         .with::<dyn ExampleSystem>();
+//! 
+//!     // Invoked when the plugin is created
+//!     fn new(mut ctx: WingsContextHandle<Self>) -> Self {
+//!         // Get the system from WASM and invoke its function
+//!         ctx.get::<dyn ExampleSystem>().print(&format!("Hello from WASM!"));
+//!         Self
+//!     }
+//! }
+//! ```
+//! 
+//! Finally, the system may be implemented on the host and exposed to plugins:
+//! 
+//! ```rust
+//! // Define a host type
+//! pub struct TestHost;
+//! 
+//! impl Host for TestHost {
+//!     // Declare the systems that should be exported to WASM,
+//!     // and the traits under which they should be exported
+//!     const SYSTEMS: Systems<Self> = systems()
+//!         .with::<ExampleSystemImpl>(traits()
+//!             .with::<dyn example_host_system::ExampleSystem>());
+//! 
+//!     ...
+//! }
+//! 
+//! // Declare an implementation for the WASM-exported system
+//! pub struct ExampleSystemImpl;
+//! 
+//! impl ExampleSystem for ExampleSystemImpl {
+//!     fn print(&self, value: &str) {
+//!         println!("Plugin says '{value}'");
+//!     }
+//! }
+//! ```
+//! 
+//! In general, anything possible with vanilla Geese is also possible with Wings. See the [example](/wings_example/) for demonstration of more functionality.
+
 use const_list::*;
 use crate::marshal::*;
 use crate::private::*;
@@ -13,9 +92,11 @@ use wings_marshal::*;
 use wings_marshal::exported_type::*;
 pub use wings_marshal::WingsError;
 
+/// Re-exports types from [`wings_marshal`] for use by the system macros.
 #[doc(hidden)]
 pub mod marshal;
 
+/// Denotes a list of system dependencies.
 #[derive(Copy, Clone, Debug)]
 pub struct Dependencies {
     /// The inner list of dependencies.
@@ -45,8 +126,9 @@ pub const fn dependencies() -> Dependencies {
     Dependencies::new()
 }
 
+/// Denotes a list of system methods that respond to events.
 pub struct EventHandlers<S: WingsSystem> {
-    // The inner list of event handlers.
+    /// The inner list of event handlers.
     inner: ConstList<'static, StaticEventHandler>,
     /// Phantom data to mark the system as used.
     data: PhantomData<fn(S)>,
@@ -72,6 +154,13 @@ impl<S: WingsSystem> EventHandlers<S> {
         }
     }
 
+    /// Invokes handler on the provided system reference, reading the event object
+    /// from the event object static.
+    /// 
+    /// # Safety
+    /// 
+    /// For this function call to be sound, no other references to the event object
+    /// static may exist.
     unsafe fn invoke_handler<T: ExportEvent>(system: &mut RefCell<S>, handler: fn(&mut S, &T)) -> GuestPointer {
         let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
 
@@ -148,6 +237,7 @@ impl<S: WingsSystem> WingsContextHandle<S> {
     }
 }
 
+/// Represents a collection of event handlers with internal state.
 pub trait WingsSystem: ExportType + Sized {
     /// The set of dependencies that this system has.
     const DEPENDENCIES: Dependencies = dependencies();
@@ -159,7 +249,9 @@ pub trait WingsSystem: ExportType + Sized {
     fn new(ctx: WingsContextHandle<Self>) -> Self;
 }
 
+/// Represents an immutable reference to a system.
 pub struct SystemRef<'a, S: ?Sized> {
+    /// The inner reference.
     inner: Ref<'a, S>
 }
 
@@ -171,7 +263,9 @@ impl<'a, S: ?Sized> Deref for SystemRef<'a, S> {
     }
 }
 
+/// Represents a mutable reference to a system.
 pub struct SystemRefMut<'a, S: ?Sized> {
+    /// The inner reference.
     inner: RefMut<'a, S>
 }
 
@@ -189,19 +283,27 @@ impl<'a, S: ?Sized> DerefMut for SystemRefMut<'a, S> {
     }
 }
 
+/// Holds a reference to a dependency trait object.
 enum DependencyHolder {
+    /// The object exists locally within the WASM instance.
     Local(FatGuestPointer),
+    /// The object exists remotely and should be accessed via the given proxy.
     Remote(Box<dyn Any>)
 }
 
+/// Holds information about the dependency of a system.
 #[derive(Copy, Clone, Debug)]
 struct DependencyType {
+    /// The type of the trait being accessed.
     pub system_trait: StaticExportedType,
+    /// The type ID of the trait.
     pub ty: fn() -> TypeId,
+    /// A function which creates a proxy object from the provided ID.
     pub proxy_func: fn(u32) -> Box<dyn Any>
 }
 
 impl DependencyType {
+    /// Creates a new `DependencyType` for the provided system trait.
     pub const fn new<T: SystemTrait + ?Sized>() -> Self {
         Self {
             system_trait: T::TYPE,
@@ -211,14 +313,19 @@ impl DependencyType {
     }
 }
 
+/// Holds deserialized versions of the most recent event.
 static mut EVENT_OBJECT: EventObject = EventObject::new();
 
+/// Holds the data for an event, as well as cached deserialized copies.
 struct EventObject {
+    /// The serialized event data.
     buffer: Vec<u8>,
+    /// The deserialized copies.
     objects: Vec<Box<dyn Any>>
 }
 
 impl EventObject {
+    /// Creates a new, empty event object.
     pub const fn new() -> Self {
         Self {
             buffer: Vec::new(),
@@ -227,12 +334,19 @@ impl EventObject {
     }
 }
 
+/// Describes an event handler that should be registered with the host.
 struct StaticEventHandler {
+    /// The type of the event to process.
     pub ty: StaticExportedType,
+    /// The actual event handler function.
     pub event_func: fn(*mut (), *const ()),
+    /// A function that should be used to deserialize the event
+    /// and invoke the handler.
     pub invoke_func: unsafe fn(*mut (), fn(*mut (), *const ())),
 }
 
+/// Resizes the marshal buffer to guarantee it reaches a certain minimum size.
+/// Returns a pointer to the beginning of the buffer.
 #[allow(clippy::uninit_vec)]
 #[no_mangle]
 unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
@@ -244,6 +358,7 @@ unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     buffer.as_mut_ptr().into()
 }
 
+/// Copies the contents of the marshal buffer into the event object structure.
 #[allow(clippy::uninit_vec)]
 #[no_mangle]
 unsafe extern "C" fn __wings_copy_event_object() {
@@ -257,18 +372,21 @@ unsafe extern "C" fn __wings_copy_event_object() {
     event_object.buffer.copy_from_slice(marshal_buffer);
 }
 
+/// Invokes the provided function with the given argument.
 #[allow(improper_ctypes_definitions)]
 #[no_mangle]
 unsafe extern "C" fn __wings_invoke_func_1(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
     func(arg)
 }
 
+/// Invokes the provided function with the given two arguments.
 #[allow(improper_ctypes_definitions)]
 #[no_mangle]
 unsafe extern "C" fn __wings_invoke_func_2(func: fn(GuestPointer, GuestPointer) -> GuestPointer, arg_0: GuestPointer, arg_1: GuestPointer) -> GuestPointer {
     func(arg_0, arg_1)
 }
 
+/// Invokes a proxy function, passing in the given arguments as well as a reference to the marshal buffer.
 #[allow(improper_ctypes_definitions)]
 #[no_mangle]
 unsafe extern "C" fn __wings_invoke_proxy_func(func: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>), pointer: FatGuestPointer, func_index: u32) -> u32 {
@@ -287,6 +405,7 @@ mod private {
 
     impl<'a, T> MutableRef<T> for &'a mut T {}
 
+    /// Represents an exported type that may be used as an event.
     pub trait ExportEvent: ExportType + Serialize + DeserializeOwned {}
 
     impl<T: ExportType + Serialize + DeserializeOwned> ExportEvent for T {}

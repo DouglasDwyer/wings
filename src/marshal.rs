@@ -3,9 +3,10 @@ pub use serde;
 
 use crate::*;
 pub use wings_macro::crate_version;
-pub use wings_marshal::{GuestPointer, InstantiateGroup, MarshalAs, Proxyable, SectionedBufferReader, SectionedBufferWriter, write_to_marshal_buffer};
+pub use wings_marshal::{GuestPointer, InstantiateGroup, Marshal, Proxyable, SectionedBufferReader, SectionedBufferWriter, write_to_marshal_buffer};
 pub use wings_marshal::exported_type::{ExportType, StaticExportedType, SystemTrait, Version};
 
+/// Creates a system descriptor for the provided system.
 pub fn system_descriptor_for<S: WingsSystem>() -> SystemDescriptor {
     let ty = S::TYPE.into();
     let new_fn = (create_system::<S> as *const ()).into();
@@ -24,6 +25,7 @@ pub fn system_descriptor_for<S: WingsSystem>() -> SystemDescriptor {
     }
 }
 
+/// Adds the given system trait to the provided descriptor.
 pub fn add_system_descriptor_trait<S: WingsSystem, W: SystemTrait + ?Sized>(descriptor: &mut SystemDescriptor, v_table: GuestPointer, invoke: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>)) {
     descriptor.traits.push(SystemTraitDescriptor {
         invoke: GuestPointer::from(invoke as *const ()),
@@ -32,6 +34,14 @@ pub fn add_system_descriptor_trait<S: WingsSystem, W: SystemTrait + ?Sized>(desc
     });
 }
 
+/// Allocates space for the given system type, creates it, and then
+/// returns a pointer to it. The system dependencies are read from the
+/// marshal buffer.
+/// 
+/// # Safety
+/// 
+/// For this function call to be sound, no other references may exist to
+/// the marshal buffer.
 unsafe fn create_system<S: WingsSystem>(_: *const ()) -> *mut RefCell<S> {
     let raw_dependencies = bincode::deserialize::<Vec<DependencyReference>>(&*std::ptr::addr_of!(MARSHAL_BUFFER))
         .expect("Failed to deserialize dependencies");
@@ -51,6 +61,12 @@ unsafe fn create_system<S: WingsSystem>(_: *const ()) -> *mut RefCell<S> {
     }))))
 }
 
+/// Drops the system at the given pointer and deallocates it.
+/// 
+/// # Safety
+/// 
+/// For this function call to be sound, the provided pointer
+/// must be valid and must not be referenced anywhere else.
 unsafe fn drop_system<S: WingsSystem>(pointer: *mut RefCell<S>) -> GuestPointer {
     drop(Box::from_raw(pointer));
     GuestPointer::default()
@@ -67,6 +83,8 @@ impl From<&StaticEventHandler> for EventHandler {
 }
 
 extern "C" {
+    /// Instructs the host to invoke a remote proxy function.
     pub fn __wings_invoke_proxy_function(id: u32, func_index: u32, pointer: GuestPointer, size: u32);
+    /// Instructs the host to raise an event.
     pub(crate) fn __wings_raise_event(pointer: GuestPointer, size: u32);
 }

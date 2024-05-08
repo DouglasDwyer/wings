@@ -5,7 +5,6 @@ instantiate_systems!(Client, [
     PluginSystem
 ]);
 
-
 #[export_system]
 pub struct PluginSystem {
     ctx: WingsContextHandle<Self>

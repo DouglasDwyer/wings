@@ -1,4 +1,4 @@
-#![allow(warnings)]
+#![allow(clippy::uninit_vec)]
 
 use const_list::*;
 use fxhash::*;
@@ -98,8 +98,8 @@ pub struct WingsImage {
 
 impl WingsImage {
     pub fn add<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module: &WingsModule) {
-        let module_id = self.add_or_get_module(module);
-        self.add_top_level_systems::<T>(module_id, module);
+        self.add_or_get_module(module);
+        self.add_top_level_systems::<T>(module);
     }
 
     fn add_or_get_module(&mut self, module: &WingsModule) -> u32 {
@@ -131,7 +131,7 @@ impl WingsImage {
         }
     }
 
-    fn add_top_level_systems<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module_id: u32, module: &WingsModule) {
+    fn add_top_level_systems<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module: &WingsModule) {
         let group_ty = ExportedType::from(T::TYPE);
         if let Some(group) = module.0.metadata.group_instantiates.iter().find(|x| x.group_ty == group_ty) {
             self.top_level_systems.extend(group.systems.iter().cloned());
@@ -182,7 +182,10 @@ impl<H: Host> WingsHost<H> {
     }
 
     pub fn instantiate(&mut self, image: &WingsImage) {
-        self.clear_image();
+        assert!(image.modules.iter().all(|x| self.id == x.0.host_id), "Image contained modules from another host");
+        if let Err(error) = self.clear_image() {
+            self.handle_error(error);
+        }
         if let Err(error) = self.try_instantiate(image) {
             self.handle_error(error);
         }
@@ -277,7 +280,7 @@ impl<H: Host> WingsHost<H> {
     }
 
     fn fill_event_handlers(&mut self, image: &WingsImage, types: &[DisjointExportedType]) {
-        let mut store = self.store.as_mut().expect("Failed to get store");
+        let store = self.store.as_mut().expect("Failed to get store");
         let data = store.data_mut();
 
         for (id, ty) in types.iter().enumerate() {
@@ -294,7 +297,7 @@ impl<H: Host> WingsHost<H> {
     }
 
     fn fill_system_traits(&mut self, image: &WingsImage, types: &[DisjointExportedType]) -> Result<FxHashMap<DisjointExportedType, u32>, WingsError> {
-        let mut store = self.store.as_mut().expect("Failed to get store");
+        let store = self.store.as_mut().expect("Failed to get store");
         let data = store.data_mut();
 
         let capacity = types.len() + data.invokers.len();
@@ -358,7 +361,7 @@ impl<H: Host> WingsHost<H> {
                             DependencyReference::Remote(*index)
                         }
                     },
-                    SystemTraitHolder::Host { invoker } => DependencyReference::Remote(*index)
+                    SystemTraitHolder::Host { invoker } => DependencyReference::Remote(invoker)
                 })
             }
             
@@ -376,8 +379,7 @@ impl<H: Host> WingsHost<H> {
             store.data_mut().systems.push(SystemHolder {
                 instance: entry.module_id,
                 pointer: GuestPointer::new(pointer as u32),
-                drop_fn: descriptor.drop_func,
-                dropped: false
+                drop_fn: descriptor.drop_func
             });
         }
 
@@ -434,7 +436,7 @@ impl<H: Host> WingsHost<H> {
 
     fn generate_system_trait_map(&self, image: &WingsImage) -> FxHashMap<DisjointExportedType, ExportedType> {
         let mut result: FxHashMap<DisjointExportedType, ExportedType> = HashMap::with_capacity_and_hasher(image.systems.len(), FxBuildHasher::default());
-        for (ty, system) in &image.systems {
+        for system in image.systems.values() {
             let descriptor = &image.modules[system.module_id as usize].0.metadata.system_descriptors[system.system_id as usize];
             for system_trait in &descriptor.traits {
                 match result.entry(DisjointExportedType::from(&system_trait.ty)) {
@@ -460,7 +462,7 @@ impl<H: Host> WingsHost<H> {
                 let descriptor = &image.modules[system.module_id as usize].0.metadata.system_descriptors[system.system_id as usize];
                 for dependency_ty in descriptor.dependencies.iter().map(DisjointExportedType::from)
                     .filter_map(|x| trait_map.get(&x).cloned().map(DisjointExportedType::from))
-                    .filter(|x| image.systems.contains_key(&x)) {
+                    .filter(|x| image.systems.contains_key(x)) {
                     to_process.push(dependency_ty.clone());
                     sort.add_dependency(dependency_ty, next.clone());
                 }
@@ -523,7 +525,6 @@ impl<H: Host> WingsHost<H> {
             let memory = ctx.data().memories[index].clone();
             memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
 
-            let system_index = *id as usize;
             let data = ctx.data_mut();
             match data.system_traits.get(*id as usize).copied() {
                 Some(SystemTraitHolder::Host { invoker }) => (data.invokers[invoker as usize].invoke)(data.ctx.as_mut().expect("Failed to get context"), *func_index as u32, &mut buffer)?,
@@ -606,7 +607,6 @@ impl<H: Host> WingsHost<H> {
     fn invoke_guest_proxy(mut ctx: &mut StoreContextMut<WingsHostInner<H>, H::Engine>, func_index: u32, system: u32, invoke: GuestPointer, v_table: GuestPointer, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
         unsafe {
             let Some(system) = ctx.data().systems.get(system as usize).copied() else { return Err(WingsError::from_trap("Invalid system ID")) };
-            let mut result = [Value::I32(0)];
     
             let index = system.instance as usize;
             let instance_funcs = ctx.data().instance_funcs[index].clone();
@@ -747,12 +747,6 @@ pub trait Host: 'static + Sized {
     }
 }
 
-#[derive(Clone, Debug)]
-struct HostFuncs {
-    invoke_proxy: Func,
-    raise_event: Func
-}
-
 type HostEventRaiserFunc<H> = fn(&GeeseContextHandle<WingsHost<H>>, &[u8]) -> Result<(), WingsError>;
 
 struct HostEventRaiser<H: Host> {
@@ -819,8 +813,7 @@ struct SystemEntry {
 struct SystemHolder {
     pub instance: u32,
     pub pointer: GuestPointer,
-    pub drop_fn: GuestPointer,
-    pub dropped: bool
+    pub drop_fn: GuestPointer
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -854,12 +847,12 @@ struct WingsModuleInner {
 }
 
 #[no_mangle]
-extern "C" fn __wings_invoke_proxy_function(id: u32, func_index: u32, pointer: GuestPointer, size: u32) {
+extern "C" fn __wings_invoke_proxy_function(_: u32, _: u32, _: GuestPointer, _: u32) {
     unreachable!()
 }
 
 #[no_mangle]
-extern "C" fn __wings_raise_event(pointer: GuestPointer, size: u32) {
+extern "C" fn __wings_raise_event(_: GuestPointer, _: u32) {
     unreachable!()
 }
 

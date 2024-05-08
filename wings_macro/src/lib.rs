@@ -1,3 +1,8 @@
+#![deny(missing_docs)]
+#![deny(clippy::missing_docs_in_private_items)]
+
+//! Defines macros for declaring traits and systems in `wings`.
+
 use proc_macro2::*;
 use quote::*;
 use std::sync::atomic::*;
@@ -5,6 +10,7 @@ use syn::*;
 use syn::parse::Parser;
 use syn::punctuated::*;
 
+/// Creates a `wings_marshal::Version` object describing the current version of this crate.
 #[proc_macro]
 pub fn crate_version(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     assert!(input.is_empty(), "Unrecognized arguments");
@@ -21,6 +27,7 @@ pub fn crate_version(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     }.into()
 }
 
+/// Exports the provided type, allowing it to be used as an event or system type.
 #[proc_macro_attribute]
 pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let original_item = TokenStream::from(item.clone());
@@ -42,6 +49,7 @@ pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
     }.into()
 }
 
+/// Exports the provided system, allowing `wings` to instantiate it and other systems to access it.
 #[proc_macro_attribute]
 pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let system_traits = get_system_traits(attr);
@@ -91,6 +99,7 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
     }.into()
 }
 
+/// Marks this trait as an interface through which plugins can access a system.
 #[proc_macro_attribute]
 pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let host_request = is_host_request(attr);
@@ -169,6 +178,8 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
     }.into()
 }
 
+/// Instructs the host to instantiate systems (and all of their dependencies)
+/// when creating the given system group.
 #[proc_macro]
 pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(input)
@@ -199,13 +210,16 @@ pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenS
     }.into()
 }
 
+/// Gets an identifier which is completely unique based upon the crate name.
 fn crate_unique_id(prefix: &str) -> Ident {
+    /// An ID that uniquely identifies procedurally-generated items in this crate.
     static UNIQUE_ID: AtomicUsize = AtomicUsize::new(0);
 
     let crate_name = std::env::var("CARGO_CRATE_NAME").expect("Failed to get crate name");
     Ident::new(&format!("{prefix}_{}_{crate_name}_{}", crate_name.len(), UNIQUE_ID.fetch_add(1, Ordering::Relaxed)), Span::call_site())
 }
 
+/// Determines based upon arguments to `system_trait` whether this is a host trait.
 fn is_host_request(attr: proc_macro::TokenStream) -> bool {
     if attr.is_empty() {
         false
@@ -217,6 +231,7 @@ fn is_host_request(attr: proc_macro::TokenStream) -> bool {
     }
 }
 
+/// Generates the `SystemTrait` implementation for a host-exported system trait.
 fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> TokenStream {
     quote! {
         impl ::wings::marshal::SystemTrait for dyn #trait_name {
@@ -228,6 +243,8 @@ fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> T
     }
 }
 
+/// Generates the proxy function implementation and proxy invocation function
+/// for the given function item.
 fn generate_proxy_function_and_invocation(index: u32, func_item: TraitItemFn) -> (TokenStream, TokenStream) {
     let func_args = get_non_receiver_args(&func_item);
     let proxy_function = generate_proxy_function(index, &func_item, &func_args);
@@ -236,6 +253,7 @@ fn generate_proxy_function_and_invocation(index: u32, func_item: TraitItemFn) ->
     (proxy_function, invocation)
 }
 
+/// Generates a proxy function for remotely calling a trait item.
 fn generate_proxy_function(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
     let rebind_arguments = (0..args.original_args.len()).map(|x| generate_rebind_argument(x, args)).collect::<Vec<_>>();
     let lower_arguments = args.index_args.iter().map(generate_lower_argument).collect::<Vec<_>>();
@@ -264,6 +282,7 @@ fn generate_proxy_function(index: u32, func_item: &TraitItemFn, args: &FuncArgs)
     }
 }
 
+/// Generates an invocation function for locally responding to a remote call.
 fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
     let func_name = &func_item.sig.ident;
     let lifted_arguments = (0..args.original_args.len()).map(|x| generate_lift_argument(x, args)).collect::<Vec<_>>();
@@ -283,6 +302,7 @@ fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArg
     }
 }
 
+/// Collates the arguments to the provided function, excluding the `self` argument.
 fn get_non_receiver_args(func_item: &TraitItemFn) -> FuncArgs {
     let mut arg_types = Vec::new();
     let mut index_args = Vec::new();
@@ -309,6 +329,7 @@ fn get_non_receiver_args(func_item: &TraitItemFn) -> FuncArgs {
     }
 }
 
+/// Generates code to rebind the given argument using a unique identifier.
 fn generate_rebind_argument(index: usize, args: &FuncArgs) -> TokenStream {
     let original_ident = args.original_args[index];
     let index_ident = &args.index_args[index];
@@ -326,12 +347,14 @@ fn generate_rebind_argument(index: usize, args: &FuncArgs) -> TokenStream {
     }
 }
 
+/// Generates code to lower the given identifier into a section writer.
 fn generate_lower_argument(identifier: &Ident) -> TokenStream {
     quote! {
-        ::wings::marshal::MarshalAs::lower_argument(&#identifier, section_writer.section()).expect("Wings failed to lower argument.");
+        ::wings::marshal::Marshal::lower_argument(&#identifier, section_writer.section()).expect("Wings failed to lower argument.");
     }
 }
 
+/// Generates code to lift the given argument from a section reader.
 fn generate_lift_argument(index: usize, args: &FuncArgs) -> TokenStream {
     let identifier = &args.index_args[index];
     let ty = &args.arg_types[index];
@@ -339,23 +362,24 @@ fn generate_lift_argument(index: usize, args: &FuncArgs) -> TokenStream {
 
     if reference {
         quote! {
-            let mut #identifier = <#ty as ::wings::marshal::MarshalAs<_>>::lift_argument(section_reader.section()?)?;
+            let mut #identifier = <#ty as ::wings::marshal::Marshal>::lift_argument(section_reader.section()?)?;
         }
     }
     else {
         quote! {
-            let mut #identifier = <&#ty as ::wings::marshal::MarshalAs<_>>::lift_argument(section_reader.section()?)?;
+            let mut #identifier = <&#ty as ::wings::marshal::Marshal>::lift_argument(section_reader.section()?)?;
         }
     }
 }
 
+/// Generates code to lift the given result argument from a section reader.
 fn generate_lift_result(index: usize, args: &FuncArgs) -> TokenStream {
     let identifier = &args.index_args[index];
     let reference = matches!(args.arg_types[index], Type::Reference(_));
 
     if reference {
         quote! {
-            ::wings::marshal::MarshalAs::lift_result(&mut #identifier, section_reader.section().expect("Wings failed to get argument result section.")).expect("Wings failed to lift argument result.");
+            ::wings::marshal::Marshal::lift_result(&mut #identifier, section_reader.section().expect("Wings failed to get argument result section.")).expect("Wings failed to lift argument result.");
         }
     }
     else {
@@ -363,6 +387,7 @@ fn generate_lift_result(index: usize, args: &FuncArgs) -> TokenStream {
     }
 }
 
+/// Generates code to lower the given result argument into a section writer.
 fn generate_lower_result(index: usize, args: &FuncArgs) -> TokenStream {
     let identifier = &args.index_args[index];
     let ty = &args.arg_types[index];
@@ -370,7 +395,7 @@ fn generate_lower_result(index: usize, args: &FuncArgs) -> TokenStream {
 
     if reference {
         quote! {
-            <#ty as ::wings::marshal::MarshalAs<_>>::lower_result(&#identifier, section_writer.section())?;
+            <#ty as ::wings::marshal::Marshal>::lower_result(&#identifier, section_writer.section())?;
         }
     }
     else {
@@ -378,6 +403,7 @@ fn generate_lower_result(index: usize, args: &FuncArgs) -> TokenStream {
     }
 }
 
+/// Generates code to create a temporary from the a stack-allocated value.
 fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
     let identifier = &args.index_args[index];
     let ty = &args.arg_types[index];
@@ -385,7 +411,7 @@ fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
 
     if reference {
         quote! {
-            <#ty as ::wings::marshal::MarshalAs<_>>::make_temporary(&mut #identifier),
+            <#ty as ::wings::marshal::Marshal>::make_temporary(&mut #identifier),
         }
     }
     else {
@@ -395,6 +421,7 @@ fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
     }
 }
 
+/// Gets the set of exported traits associated with a system.
 fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<ExprPath> {
     let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(attr)
         .expect("Failed to parse system traits");
@@ -405,8 +432,12 @@ fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<ExprPath> {
     }).collect()
 }
 
+/// The arguments to a trait function.
 struct FuncArgs<'a> {
+    /// The types of the arguments.
     pub arg_types: Vec<&'a Type>,
+    /// The arguments as relabeled, unique index-based identifiers.
     pub index_args: Vec<Ident>,
+    /// The original argument identifiers.
     pub original_args: Vec<&'a Ident>,
 }
