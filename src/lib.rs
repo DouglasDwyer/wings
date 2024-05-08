@@ -167,7 +167,7 @@ impl<'a, S: ?Sized> Deref for SystemRef<'a, S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
@@ -179,13 +179,13 @@ impl<'a, S: ?Sized> Deref for SystemRefMut<'a, S> {
     type Target = S;
 
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        &self.inner
     }
 }
 
 impl<'a, S: ?Sized> DerefMut for SystemRefMut<'a, S> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        &mut self.inner
     }
 }
 
@@ -233,6 +233,7 @@ struct StaticEventHandler {
     pub invoke_func: unsafe fn(*mut (), fn(*mut (), *const ())),
 }
 
+#[allow(clippy::uninit_vec)]
 #[no_mangle]
 unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     let buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
@@ -243,6 +244,7 @@ unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
     buffer.as_mut_ptr().into()
 }
 
+#[allow(clippy::uninit_vec)]
 #[no_mangle]
 unsafe extern "C" fn __wings_copy_event_object() {
     let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
@@ -252,7 +254,7 @@ unsafe extern "C" fn __wings_copy_event_object() {
 
     event_object.buffer.reserve(marshal_buffer.len());
     event_object.buffer.set_len(marshal_buffer.len());
-    event_object.buffer.copy_from_slice(&marshal_buffer);
+    event_object.buffer.copy_from_slice(marshal_buffer);
 }
 
 #[allow(improper_ctypes_definitions)]

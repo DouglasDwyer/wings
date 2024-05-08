@@ -269,10 +269,9 @@ fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArg
     let lifted_arguments = (0..args.original_args.len()).map(|x| generate_lift_argument(x, args)).collect::<Vec<_>>();
     let made_temporaries = (0..args.original_args.len()).map(|x| generate_make_temporary(x, args)).collect::<Vec<_>>();
     let lowered_results = (0..args.original_args.len()).map(|x| generate_lower_result(x, args)).collect::<Vec<_>>();
-    let id = index as u32;
 
     quote! {
-        if func_index == #id {
+        if func_index == #index {
             let mut section_reader = ::wings::marshal::SectionedBufferReader::new(&mut *buffer);
             #(#lifted_arguments)*
             drop(section_reader);
