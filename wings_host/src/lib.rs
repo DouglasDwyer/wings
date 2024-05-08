@@ -193,7 +193,7 @@ impl<H: Host> WingsHost<H> {
             for i in 1..group.systems.len() {
                 for j in 0..i {
                     if group.systems[i] == group.systems[j] {
-                        return Err(WingsError::from_invalid_module(format_args!("Duplicate instantiated systems in group {}", group.group_ty.name)));
+                        return Err(WingsError::from_invalid_module(format!("Duplicate instantiated systems in group {}", group.group_ty.name)));
                     }
                 }
             }
@@ -268,8 +268,8 @@ impl<H: Host> WingsHost<H> {
         let mut imports = Imports::new();
         for import in module.imports(&self.engine) {
             let func = match import.ty {
-                ExternType::Func(func_ty) => Func::new(&mut ctx, func_ty, |_, _, _| anyhow::bail!("Module called stub method")),
-                _ => return Err(WingsError::InvalidModule("Module imported unexpected object".to_string()))
+                ExternType::Func(func_ty) => Func::new(&mut ctx, func_ty, |_, _, _| Err(WingsError::from_invalid_module("Module called stub method").into())),
+                _ => return Err(WingsError::from_invalid_module("Module imported unexpected object"))
             };
             imports.define(import.module, import.name, Extern::Func(func));
         }
@@ -528,7 +528,7 @@ impl<H: Host> WingsHost<H> {
             match data.system_traits.get(*id as usize).copied() {
                 Some(SystemTraitHolder::Host { invoker }) => (data.invokers[invoker as usize].invoke)(data.ctx.as_mut().expect("Failed to get context"), *func_index as u32, &mut buffer)?,
                 Some(SystemTraitHolder::Guest { invoke, system, v_table }) => Self::invoke_guest_proxy(&mut ctx, *func_index as u32, system, invoke, v_table, &mut buffer)?,
-                None => anyhow::bail!("Invalid system trait index"),
+                None => return Err(WingsError::from_trap("Invalid system trait index").into()),
             }
 
             let mut result = [Value::I32(0)];
@@ -588,13 +588,13 @@ impl<H: Host> WingsHost<H> {
 
     fn get_instance_func<C: AsContextMut>(mut ctx: C, instance: &Instance, name: &str, ty: FuncType) -> Result<Func, WingsError> {
         let Some(Extern::Func(func)) = instance.get_export(&mut ctx, name)
-            else { return Err(WingsError::from_invalid_module(format_args!("Module missing intrinsic {name}"))) };
+            else { return Err(WingsError::from_invalid_module(format!("Module missing intrinsic {name}"))) };
 
         if func.ty(&mut ctx) == ty {
             Ok(func)
         }
         else {
-            Err(WingsError::from_invalid_module(format_args!("Module intrinsic {name} had invalid signature")))
+            Err(WingsError::from_invalid_module(format!("Module intrinsic {name} had invalid signature")))
         }
     }
 

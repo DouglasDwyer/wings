@@ -387,20 +387,20 @@ pub enum WingsError {
     #[error("A function call was invalid")]
     InvalidFunction(),
     #[error("The module was invalid: {0}")]
-    InvalidModule(String),
+    InvalidModule(Box<dyn std::error::Error + Send + Sync>),
     #[error("{0}")]
     Serialization(bincode::Error),
     #[error("{0}")]
-    Trap(String)
+    Trap(Box<dyn std::error::Error + Send + Sync>)
 }
 
 impl WingsError {
-    pub fn from_invalid_module(x: impl std::fmt::Display) -> Self {
-        Self::InvalidModule(x.to_string())
+    pub fn from_invalid_module(x: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::InvalidModule(x.into())
     }
 
-    pub fn from_trap(x: impl std::fmt::Display) -> Self {
-        Self::Trap(x.to_string())
+    pub fn from_trap(x: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Trap(x.into())
     }
 }
 

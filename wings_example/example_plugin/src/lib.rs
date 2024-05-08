@@ -2,33 +2,24 @@ use example_host_system::*;
 use wings::*;
 
 instantiate_systems!(Client, [
-    Crunk
+    PluginSystem
 ]);
 
-#[system_trait]
-pub trait ThePublic {}
 
-#[system_trait]
-pub trait TheSkunk {
-}
-
-#[export_system(ThePublic)]
-pub struct Crunk {
+#[export_system]
+pub struct PluginSystem {
     ctx: WingsContextHandle<Self>
 }
 
-impl Crunk {
+impl PluginSystem {
     fn handle_event(&mut self, event: &example_host_system::on::ExampleEvent) {
         self.ctx.get::<dyn ExampleSystem>().print(&format!("Handle event {}", event.value));
     }
 }
 
-impl ThePublic for Crunk {}
-
-impl WingsSystem for Crunk {
+impl WingsSystem for PluginSystem {
     const DEPENDENCIES: Dependencies = dependencies()
-        .with::<dyn ExampleSystem>()
-        .with::<dyn TheSkunk>();
+        .with::<dyn ExampleSystem>();
 
     const EVENT_HANDLERS: EventHandlers<Self> = event_handlers()
         .with(Self::handle_event);
@@ -37,7 +28,7 @@ impl WingsSystem for Crunk {
         let mut my_val = 22;
         ctx.get_mut::<dyn ExampleSystem>().set_and_double(&mut my_val);
         ctx.raise_event(example_host_system::on::ExampleEvent { value: 10112 });
-        ctx.get::<dyn ExampleSystem>().print(&format!("Your mom lol {}", my_val));
+        ctx.get::<dyn ExampleSystem>().print(&format!("The new value was {}", my_val));
 
         Self {
             ctx
@@ -45,20 +36,8 @@ impl WingsSystem for Crunk {
     }
 }
 
-impl Drop for Crunk {
+impl Drop for PluginSystem {
     fn drop(&mut self) {
-        self.ctx.get::<dyn ExampleSystem>().print(&format!("oops drop it"));
-    }
-}
-
-#[export_system(TheSkunk)]
-pub struct Skunk;
-
-impl TheSkunk for Skunk {
-}
-
-impl WingsSystem for Skunk {
-    fn new(_: WingsContextHandle<Self>) -> Self {
-        Self
+        self.ctx.get::<dyn ExampleSystem>().print(&format!("The system was dropped"));
     }
 }

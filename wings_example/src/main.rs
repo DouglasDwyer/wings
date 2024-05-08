@@ -2,6 +2,8 @@ use example_host_system::*;
 use geese::*;
 use wings_host::*;
 
+include!(concat!(env!("OUT_DIR"), "/example_plugin.rs"));
+
 pub struct TestHost;
 
 impl Host for TestHost {
@@ -29,24 +31,24 @@ impl ExampleSystemImpl {
     }
 
     fn on_example_event(&mut self, event: &example_host_system::on::ExampleEvent) {
-        println!("Raised !! {}", event.value);
+        println!("Received an event from the guest: {}", event.value);
     }
 }
 
 impl ExampleSystem for ExampleSystemImpl {
     fn get_value(&self) -> u32 {
-        println!("getit");
+        println!("Get the value from the host");
         self.value
     }
 
     fn set_and_double(&mut self, value: &mut u32) {
-        println!("setit");
+        println!("Set the value and double it on the host");
         self.value = *value;
         *value *= 2;
     }
 
     fn print(&self, value: &str) {
-        println!("Plugin says {value}");
+        println!("Plugin says '{value}'");
     }
 }
 
@@ -69,18 +71,27 @@ impl GeeseSystem for ExampleSystemImpl {
 }
 
 fn main() {
+    // Create an event system context
     let mut ctx = GeeseContext::default();
+
+    // Add the host system
     ctx.flush()
         .with(geese::notify::add_system::<WingsHost<TestHost>>());
 
+    // Get the host system
     let mut host = ctx.get_mut::<WingsHost<TestHost>>();
-    let module = host.load(&include_bytes!("../target/wasm32-unknown-unknown/debug/example_plugin.wasm")[..]).unwrap();
+
+    // Load a module
+    let module = host.load(EXAMPLE_PLUGIN_WASM).unwrap();
     
+    // Create an image of all the modules to instantiate
     let mut image = WingsImage::default();
     image.add::<example_host_system::Client>(&module);
 
+    // Link and instantiate the systems contained in the given image
     host.instantiate(&image);
     drop(host);
     
+    // Process all events raised during instantiation
     ctx.flush();
 }

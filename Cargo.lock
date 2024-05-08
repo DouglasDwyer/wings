@@ -594,21 +594,27 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "const_list",
- "example_host_system",
- "geese",
  "serde",
- "wasm_runtime_layer",
- "wasmi",
- "wings_host",
  "wings_macro",
  "wings_marshal",
+]
+
+[[package]]
+name = "wings_example"
+version = "0.1.0"
+dependencies = [
+ "example_host_system",
+ "geese",
+ "wasm_runtime_layer",
+ "wasmi",
+ "wings",
+ "wings_host",
 ]
 
 [[package]]
 name = "wings_host"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bincode",
  "const_list",
  "fxhash",

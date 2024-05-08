@@ -1,18 +1,16 @@
-cargo-features = ["per-package-target"]
-
 [package]
-name = "example_plugin"
+name = "wings_example"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
 description.workspace = true
-forced-target = "wasm32-unknown-unknown"
-
-[lib]
-crate-type = [ "rlib", "cdylib" ]
 
 [dependencies]
+geese.workspace = true
 example_host_system.workspace = true
+wasm_runtime_layer = { workspace = true, features = [ "backend_wasmi" ] }
+wasmi.workspace = true
 wings.workspace = true
+wings_host.workspace = true

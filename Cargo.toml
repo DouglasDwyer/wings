@@ -2,8 +2,9 @@
 
 members = [
     ".",
-    "examples/example_host_system",
-    "examples/example_plugin",
+    "wings_example",
+    "wings_example/example_host_system",
+    "wings_example/example_plugin",
     "wings_host",
     "wings_macro",
     "wings_marshal"
@@ -22,16 +23,16 @@ WASM plugin system for Geese.
 [workspace.dependencies]
 
 # Internal dependencies
-example_host_system = { path = "examples/example_host_system" }
-example_plugin = { path = "examples/example_plugin" }
+example_host_system = { path = "wings_example/example_host_system" }
+example_plugin = { path = "wings_example/example_plugin" }
 wings = { path = ".", version = "0.1.0" }
+wings_example = { path = "wings_example", version = "0.1.0" }
 wings_host = { path = "wings_host", version = "0.1.0" }
 wings_macro = { path = "wings_macro", version = "0.1.0" }
 wings_marshal = { path = "wings_marshal", version = "0.1.0" }
 
 # External dependencies
 
-anyhow = { version = "1.0.82", default-features = false }
 bincode = { version = "1.3.3", default-features = false }
 const_list = { version = "0.1.0", default-features = false }
 fxhash = { version = "0.2.1", default-features = false }
@@ -60,10 +61,3 @@ const_list.workspace = true
 serde.workspace = true
 wings_macro.workspace = true
 wings_marshal.workspace = true
-
-[dev-dependencies]
-geese.workspace = true
-example_host_system.workspace = true
-wasm_runtime_layer = { workspace = true, features = [ "backend_wasmi" ] }
-wasmi.workspace = true
-wings_host.workspace = true
