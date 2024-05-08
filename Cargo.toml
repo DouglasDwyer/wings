@@ -5,7 +5,8 @@ members = [
     "examples/example_host_system",
     "examples/example_plugin",
     "wings_host",
-    "wings_macro"
+    "wings_macro",
+    "wings_marshal"
 ]
 
 [workspace.package]
@@ -26,6 +27,7 @@ example_plugin = { path = "examples/example_plugin" }
 wings = { path = ".", version = "0.1.0" }
 wings_host = { path = "wings_host", version = "0.1.0" }
 wings_macro = { path = "wings_macro", version = "0.1.0" }
+wings_marshal = { path = "wings_marshal", version = "0.1.0" }
 
 # External dependencies
 
@@ -56,8 +58,8 @@ description.workspace = true
 bincode.workspace = true
 const_list.workspace = true
 serde.workspace = true
-thiserror.workspace = true
 wings_macro.workspace = true
+wings_marshal.workspace = true
 
 [dev-dependencies]
 geese.workspace = true

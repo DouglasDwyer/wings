@@ -1,5 +1,4 @@
 use const_list::*;
-pub use crate::exported_type::*;
 use crate::marshal::*;
 use crate::private::*;
 use serde::*;
@@ -9,11 +8,12 @@ use std::cell::*;
 use std::marker::*;
 use std::mem::*;
 use std::ops::*;
-use std::rc::*;
-use thiserror::*;
-pub use wings_macro::*;
+pub use wings_macro::{export_system, export_type, instantiate_systems, system_trait};
+use wings_marshal::*;
+use wings_marshal::exported_type::*;
+pub use wings_marshal::WingsError;
 
-mod exported_type;
+#[doc(hidden)]
 pub mod marshal;
 
 #[derive(Copy, Clone, Debug)]
@@ -72,7 +72,7 @@ impl<S: WingsSystem> EventHandlers<S> {
         }
     }
 
-    unsafe fn invoke_handler<T: ExportEvent>(system: &mut S, handler: fn(&mut S, &T)) -> GuestPointer {
+    unsafe fn invoke_handler<T: ExportEvent>(system: &mut RefCell<S>, handler: fn(&mut S, &T)) -> GuestPointer {
         let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
 
         let object = if let Some(object) = event_object.objects.iter().find(|x| x.is::<T>()) {
@@ -83,7 +83,7 @@ impl<S: WingsSystem> EventHandlers<S> {
             event_object.objects.last().expect("Failed to get last object in event objects list")
         };
 
-        handler(system, object.downcast_ref().unwrap());
+        handler(&mut system.borrow_mut(), object.downcast_ref().unwrap_unchecked());
         GuestPointer::default()
     }
 }
@@ -196,7 +196,6 @@ enum DependencyHolder {
 
 #[derive(Copy, Clone, Debug)]
 struct DependencyType {
-    pub exported_system: StaticExportedType,
     pub system_trait: StaticExportedType,
     pub ty: fn() -> TypeId,
     pub proxy_func: fn(u32) -> Box<dyn Any>
@@ -205,7 +204,6 @@ struct DependencyType {
 impl DependencyType {
     pub const fn new<T: SystemTrait + ?Sized>() -> Self {
         Self {
-            exported_system: T::SYSTEM_TYPE,
             system_trait: T::TYPE,
             ty: TypeId::of::<T>,
             proxy_func: |x| Box::new(RefCell::new(T::create_proxy(x)))
@@ -235,28 +233,45 @@ struct StaticEventHandler {
     pub invoke_func: unsafe fn(*mut (), fn(*mut (), *const ())),
 }
 
-#[derive(Debug, Error)]
-pub enum WingsError {
-    #[error("There was a cyclic dependency between systems")]
-    CyclicDependency(),
-    #[error("A function call was invalid")]
-    InvalidFunction(),
-    #[error("The module was invalid: {0}")]
-    InvalidModule(String),
-    #[error("{0}")]
-    Serialization(bincode::Error),
-    #[error("{0}")]
-    Trap(String)
+#[no_mangle]
+unsafe extern "C" fn __wings_alloc_marshal_buffer(size: u32) -> GuestPointer {
+    let buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
+    let to_reserve = size as usize;
+    buffer.clear();
+    buffer.reserve(to_reserve);
+    buffer.set_len(to_reserve);
+    buffer.as_mut_ptr().into()
 }
 
-impl WingsError {
-    pub fn from_invalid_module(x: impl std::fmt::Display) -> Self {
-        Self::InvalidModule(x.to_string())
-    }
+#[no_mangle]
+unsafe extern "C" fn __wings_copy_event_object() {
+    let event_object = &mut *std::ptr::addr_of_mut!(EVENT_OBJECT);
+    let marshal_buffer = &*std::ptr::addr_of!(MARSHAL_BUFFER);
+    event_object.buffer.clear();
+    event_object.objects.clear();
 
-    pub fn from_trap(x: impl std::fmt::Display) -> Self {
-        Self::Trap(x.to_string())
-    }
+    event_object.buffer.reserve(marshal_buffer.len());
+    event_object.buffer.set_len(marshal_buffer.len());
+    event_object.buffer.copy_from_slice(&marshal_buffer);
+}
+
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_func_1(func: fn(GuestPointer) -> GuestPointer, arg: GuestPointer) -> GuestPointer {
+    func(arg)
+}
+
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_func_2(func: fn(GuestPointer, GuestPointer) -> GuestPointer, arg_0: GuestPointer, arg_1: GuestPointer) -> GuestPointer {
+    func(arg_0, arg_1)
+}
+
+#[allow(improper_ctypes_definitions)]
+#[no_mangle]
+unsafe extern "C" fn __wings_invoke_proxy_func(func: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>), pointer: FatGuestPointer, func_index: u32) -> u32 {
+    func(pointer, func_index, &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER));
+    (*std::ptr::addr_of_mut!(MARSHAL_BUFFER)).len() as u32
 }
 
 /// Hides traits from being externally visible.

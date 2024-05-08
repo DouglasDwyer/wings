@@ -13,7 +13,7 @@ pub fn crate_version(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
     let patch: u32 = std::env::var("CARGO_PKG_VERSION_PATCH").ok().as_deref().and_then(|x| x.parse().ok()).expect("Failed to parse crate major version.");
 
     quote! {
-        ::wings::Version {
+        ::wings::marshal::Version {
             major: #major,
             minor: #minor,
             patch: #patch
@@ -33,10 +33,10 @@ pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
         #[serde(crate = "wings::marshal::serde")]
         #original_item
 
-        impl ::wings::ExportType for #name {
-            const TYPE: ::wings::StaticExportedType = ::wings::StaticExportedType {
+        impl ::wings::marshal::ExportType for #name {
+            const TYPE: ::wings::marshal::StaticExportedType = ::wings::marshal::StaticExportedType {
                 name: concat!( module_path!(), "::", #name_str ),
-                version: ::wings::crate_version!()
+                version: ::wings::marshal::crate_version!()
             };
         }
     }.into()
@@ -57,15 +57,15 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
         #original_item
 
         #(
-            impl ::wings::SystemTrait for dyn #system_traits {
-                const SYSTEM_TYPE: ::wings::StaticExportedType = <#name as ::wings::ExportType>::TYPE;
+            impl ::wings::marshal::SystemTrait for dyn #system_traits {
+                const SYSTEM_TYPE: ::wings::marshal::StaticExportedType = <#name as ::wings::marshal::ExportType>::TYPE;
             }
         )*
 
-        impl ::wings::ExportType for #name {
-            const TYPE: ::wings::StaticExportedType = ::wings::StaticExportedType {
+        impl ::wings::marshal::ExportType for #name {
+            const TYPE: ::wings::marshal::StaticExportedType = ::wings::marshal::StaticExportedType {
                 name: concat!( module_path!(), "::", #name_str ),
-                version: ::wings::crate_version!()
+                version: ::wings::marshal::crate_version!()
             };
         }
 
@@ -73,13 +73,14 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
             #[allow(unused)]
             #[no_mangle]
             unsafe extern "C" fn #export_function_identifier () -> ::wings::marshal::GuestPointer {
-                let mut descriptor = ::wings::marshal::SystemDescriptor::new::< #name >();
+                let mut descriptor = ::wings::marshal::system_descriptor_for::< #name >();
                 
                 #(
                     let sample_pointer = ::std::ptr::null::<#name>();
                     let v_table = ::std::mem::transmute::<_, [ * const (); 2]>(sample_pointer as * const dyn #system_traits)[1].into();
 
-                    descriptor.add_trait::< #name, dyn #system_traits >(
+                    ::wings::marshal::add_system_descriptor_trait::< #name, dyn #system_traits >(
+                        &mut descriptor,
                         v_table,
                         |system, func_index, buffer| ::wings::marshal::Proxyable::invoke(&mut *(*system.cast::<::std::cell::RefCell<dyn #system_traits>>()).borrow_mut(), func_index, buffer).expect("Failed to call proxy function"));
                 )*
@@ -156,10 +157,10 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
                 }
             }
 
-            impl ::wings::ExportType for dyn #trait_name {
-                const TYPE: ::wings::StaticExportedType = ::wings::StaticExportedType {
+            impl ::wings::marshal::ExportType for dyn #trait_name {
+                const TYPE: ::wings::marshal::StaticExportedType = ::wings::marshal::StaticExportedType {
                     name: concat!( module_path!(), "::", #trait_name_string ),
-                    version: ::wings::crate_version!()
+                    version: ::wings::marshal::crate_version!()
                 };
             }
 
@@ -189,8 +190,8 @@ pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenS
             #[no_mangle]
             unsafe extern "C" fn #instantiate_id () -> ::wings::marshal::GuestPointer {
                 let descriptor = ::wings::marshal::InstantiateGroup {
-                    group_ty: <#group_path as ::wings::ExportType>::TYPE.into(),
-                    systems: vec!( #( <#system_paths as ::wings::ExportType>::TYPE.into() , )* )
+                    group_ty: <#group_path as ::wings::marshal::ExportType>::TYPE.into(),
+                    systems: vec!( #( <#system_paths as ::wings::marshal::ExportType>::TYPE.into() , )* )
                 };
                 ::wings::marshal::write_to_marshal_buffer(&descriptor)
             }
@@ -218,10 +219,10 @@ fn is_host_request(attr: proc_macro::TokenStream) -> bool {
 
 fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> TokenStream {
     quote! {
-        impl ::wings::SystemTrait for dyn #trait_name {
-            const SYSTEM_TYPE: ::wings::StaticExportedType = ::wings::StaticExportedType {
+        impl ::wings::marshal::SystemTrait for dyn #trait_name {
+            const SYSTEM_TYPE: ::wings::marshal::StaticExportedType = ::wings::marshal::StaticExportedType {
                 name: concat!( module_path!(), "::", #trait_name_string ),
-                version: ::wings::crate_version!()
+                version: ::wings::marshal::crate_version!()
             };
         }
     }

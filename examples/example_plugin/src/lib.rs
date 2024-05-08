@@ -10,7 +10,6 @@ pub trait ThePublic {}
 
 #[system_trait]
 pub trait TheSkunk {
-    fn bro(&self, val: u32);
 }
 
 #[export_system(ThePublic)]
@@ -20,12 +19,7 @@ pub struct Crunk {
 
 impl Crunk {
     fn handle_event(&mut self, event: &example_host_system::on::ExampleEvent) {
-        //let mut test = self.ctx.get_mut::<dyn ExampleSystem>();
-        //let mut x = 2;
-        //test.set_and_double(&mut x);
-        //x = test.get_value() / 2;
-        //test.set_and_double(&mut x);
-        unsafe { wings::marshal::__wings_dbg(69420 + event.value); }
+        self.ctx.get::<dyn ExampleSystem>().print(&format!("Handle event {}", event.value));
     }
 }
 
@@ -40,10 +34,8 @@ impl WingsSystem for Crunk {
         .with(Self::handle_event);
 
     fn new(mut ctx: WingsContextHandle<Self>) -> Self {
-
         let mut my_val = 22;
         ctx.get_mut::<dyn ExampleSystem>().set_and_double(&mut my_val);
-        ctx.get::<dyn TheSkunk>().bro(ctx.get::<dyn ExampleSystem>().get_value());
         ctx.raise_event(example_host_system::on::ExampleEvent { value: 10112 });
         ctx.get::<dyn ExampleSystem>().print(&format!("Your mom lol {}", my_val));
 
@@ -63,14 +55,10 @@ impl Drop for Crunk {
 pub struct Skunk;
 
 impl TheSkunk for Skunk {
-    fn bro(&self, val: u32) {
-        unsafe { wings::marshal::__wings_dbg(val); }
-    }
 }
 
 impl WingsSystem for Skunk {
     fn new(_: WingsContextHandle<Self>) -> Self {
-        unsafe { wings::marshal::__wings_dbg(1); }
         Self
     }
 }

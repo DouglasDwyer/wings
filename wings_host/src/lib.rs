@@ -13,8 +13,8 @@ use std::sync::*;
 use std::sync::atomic::*;
 use topological_sort::*;
 use wasm_runtime_layer::*;
-pub use wings::*;
-use wings::marshal::*;
+use wings_marshal::*;
+use wings_marshal::exported_type::*;
 
 pub struct Events<H: Host> {
     event_handlers: geese::EventHandlers<WingsHost<H>>,
@@ -97,7 +97,7 @@ pub struct WingsImage {
 }
 
 impl WingsImage {
-    pub fn add<T: wings::ExportType + ?Sized>(&mut self, module: &WingsModule) {
+    pub fn add<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module: &WingsModule) {
         let module_id = self.add_or_get_module(module);
         self.add_top_level_systems::<T>(module_id, module);
     }
@@ -131,7 +131,7 @@ impl WingsImage {
         }
     }
 
-    fn add_top_level_systems<T: wings::ExportType + ?Sized>(&mut self, module_id: u32, module: &WingsModule) {
+    fn add_top_level_systems<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module_id: u32, module: &WingsModule) {
         let group_ty = ExportedType::from(T::TYPE);
         if let Some(group) = module.0.metadata.group_instantiates.iter().find(|x| x.group_ty == group_ty) {
             self.top_level_systems.extend(group.systems.iter().cloned());
@@ -489,9 +489,6 @@ impl<H: Host> WingsHost<H> {
         imports.define("env", "__wings_invoke_proxy_function", Extern::Func(Self::create_invoke_proxy_func(&mut ctx, index)));
         imports.define("env", "__wings_raise_event", Extern::Func(Self::create_raise_event_func(&mut ctx, index)));
 
-        imports.define("env", "__wings_dbg", Extern::Func(Func::new(&mut ctx, FuncType::new([ValueType::I32], []),
-            |_, params, _| { println!("DBG: {:?}", params[0]); Ok(()) })));
-
         imports
     }
 
@@ -644,7 +641,7 @@ impl<H: Host> WingsHost<H> {
         self.instantiate_systems(image, &sorted_dependencies, &trait_map)
     }
 
-    fn dispatch_event<T: wings::ExportType + Serialize + DeserializeOwned>(&mut self, event: &T) {
+    fn dispatch_event<T: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned>(&mut self, event: &T) {
         if let Err(error) = bincode::serialize(&event).map_err(WingsError::Serialization).and_then(|x| self.dispatch_raw_event(&ExportedType::from(T::TYPE).into(), &x)) {
             self.handle_error(error);
         }
@@ -866,11 +863,6 @@ extern "C" fn __wings_raise_event(pointer: GuestPointer, size: u32) {
     unreachable!()
 }
 
-#[no_mangle]
-extern "C" fn __wings_dbg(x: u32) {
-    unreachable!()
-}
-
 pub mod on {
     use super::*;
 
@@ -890,6 +882,6 @@ pub mod on {
 mod private {
     use super::*;
 
-    pub trait HostEvent: wings::ExportType + Serialize + DeserializeOwned + Send + Sync {}
-    impl<T: wings::ExportType + Serialize + DeserializeOwned + Send + Sync> HostEvent for T {}
+    pub trait HostEvent: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned + Send + Sync {}
+    impl<T: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned + Send + Sync> HostEvent for T {}
 }
