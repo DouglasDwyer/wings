@@ -1,4 +1,8 @@
 #![allow(clippy::uninit_vec)]
+#![deny(missing_docs)]
+#![deny(clippy::missing_docs_in_private_items)]
+
+//! Defines the host system and events for the [`wings`](https://github.com/DouglasDwyer/wings) plugin system.
 
 use const_list::*;
 use fxhash::*;
@@ -16,12 +20,16 @@ use wasm_runtime_layer::*;
 use wings_marshal::*;
 use wings_marshal::exported_type::*;
 
+/// Denotes a set of events that the host may send and receive from WASM plugins.
 pub struct Events<H: Host> {
+    /// The event handlers for sending the events to WASM.
     event_handlers: geese::EventHandlers<WingsHost<H>>,
+    /// The event raisers for receiving the event from WASM.
     event_raisers: ConstList<'static, HostEventRaiser<H>>
 }
 
 impl<H: Host> Events<H> {
+    /// Adds the given event to the list.
     pub const fn with<T: HostEvent>(&'static self) -> Self {
         Self {
             event_handlers: self.event_handlers.with(WingsHost::dispatch_event::<T>),
@@ -29,12 +37,14 @@ impl<H: Host> Events<H> {
         }
     }
 
+    /// Deserializes the provided buffer and raises it as an event of the provided type.
     fn raise<T: HostEvent>(ctx: &GeeseContextHandle<WingsHost<H>>, buffer: &[u8]) -> Result<(), WingsError> {
         ctx.raise_event(bincode::deserialize::<T>(buffer).map_err(WingsError::Serialization)?);
         Ok(())
     }
 }
 
+/// Creates a new, empty set of host events.
 pub const fn events<H: Host>() -> Events<H> {
     Events {
         event_handlers: geese::event_handlers(),
@@ -42,12 +52,16 @@ pub const fn events<H: Host>() -> Events<H> {
     }
 }
 
+/// Denotes a set of systems that the host will expose to WASM plugins.
 pub struct Systems<H: Host> {
+    /// The set of dependencies required by the `WingsHost` to access these systems.
     dependencies: geese::Dependencies,
+    /// The traits through which the WASM plugins will access the host.
     traits: ConstList<'static, ConstList<'static, HostSystemTrait<H>>>
 }
 
 impl<H: Host> Systems<H> {
+    /// Adds the given system to the list.
     pub const fn with<S: GeeseSystem>(&'static self, traits: Traits<H, S>) -> Self {
         Self {
             dependencies: self.dependencies.with::<Mut<S>>(),
@@ -57,6 +71,7 @@ impl<H: Host> Systems<H> {
 
 }
 
+/// Creates a new, empty set of host systems.
 pub const fn systems<H: Host>() -> Systems<H> {
     Systems {
         dependencies: geese::dependencies(),
@@ -64,12 +79,16 @@ pub const fn systems<H: Host>() -> Systems<H> {
     }
 }
 
+/// Defines the traits through which a system is exposed to WASM.
 pub struct Traits<H: Host, S: GeeseSystem> {
+    /// The inner list of trait data.
     inner: ConstList<'static, HostSystemTrait<H>>,
+    /// Generic marker.
     marker: PhantomData<fn(S)>
 }
 
 impl<H: Host, S: GeeseSystem> Traits<H, S> {
+    /// Exposes the system under the given trait.
     pub const fn with<T: Proxyable + SystemTrait + ?Sized>(&'static self) -> Self where S: AsMut<T> {
         Self {
             inner: self.inner.push(HostSystemTrait { ty: T::TYPE, invoke: Self::invoke::<T> }),
@@ -77,11 +96,13 @@ impl<H: Host, S: GeeseSystem> Traits<H, S> {
         }
     }
 
+    /// Performs a proxy invocation on the system via the given trait.
     unsafe fn invoke<T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError> where S: AsMut<T> {
         ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
     }
 }
 
+/// Creates a new, empty set of host traits.
 pub const fn traits<H: Host, S: GeeseSystem>() -> Traits<H, S> {
     Traits {
         inner: ConstList::new(),
@@ -89,31 +110,35 @@ pub const fn traits<H: Host, S: GeeseSystem>() -> Traits<H, S> {
     }
 }
 
+/// Represents a group of WASM plugins that should be instantiated together.
 #[derive(Clone, Debug, Default)]
 pub struct WingsImage {
+    /// The underlying WASM modules.
     modules: Vec<WingsModule>,
+    /// A mapping from system types to the entries that should be used when instantiating them.
     systems: FxHashMap<DisjointExportedType, SystemEntry>,
+    /// The top-level systems that should be created when this image is instantiated.
     top_level_systems: FxHashSet<ExportedType>
 }
 
 impl WingsImage {
+    /// Adds all of the systems in the given group to this image.
+    /// All associated systems will be created when this image is instantiated.
     pub fn add<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module: &WingsModule) {
-        self.add_or_get_module(module);
+        self.add_new_module(module);
         self.add_top_level_systems::<T>(module);
     }
 
-    fn add_or_get_module(&mut self, module: &WingsModule) -> u32 {
-        if let Some(position) = self.modules.iter().position(|x| x == module) {
-            position as u32
-        }
-        else {
+    /// Adds a module to the image if it does not already exist.
+    fn add_new_module(&mut self, module: &WingsModule) {
+        if !self.modules.contains(module) {
             let result = self.modules.len() as u32;
             self.modules.push(module.clone());
             self.add_systems(module, result);
-            result
         }
     }
 
+    /// Adds all systems from the given module to this image.
     fn add_systems(&mut self, module: &WingsModule, module_id: u32) {
         for (index, system) in module.0.metadata.system_descriptors.iter().enumerate() {
             let entry = SystemEntry {
@@ -131,6 +156,7 @@ impl WingsImage {
         }
     }
 
+    /// Adds all top-level systems for the provided group to the top-level list.
     fn add_top_level_systems<T: wings_marshal::exported_type::ExportType + ?Sized>(&mut self, module: &WingsModule) {
         let group_ty = ExportedType::from(T::TYPE);
         if let Some(group) = module.0.metadata.group_instantiates.iter().find(|x| x.group_ty == group_ty) {
@@ -139,14 +165,17 @@ impl WingsImage {
     }
 }
 
+/// Represents a parsed, loaded WASM plugin.
 #[derive(Clone, Debug)]
 pub struct WingsModule(Arc<WingsModuleInner>);
 
 impl WingsModule {
+    /// Gets an iterator over all of the instantiation groups declared in this module.
     pub fn groups(&self) -> impl '_ + Iterator<Item = &ExportedType> {
         self.0.metadata.group_instantiates.iter().map(|x| &x.group_ty)
     }
 
+    /// Gets an iterator over all of the systems declared in this module.
     pub fn systems(&self) -> impl '_ + Iterator<Item = &ExportedType> {
         self.0.metadata.system_descriptors.iter().map(|x| &x.ty)
     }
@@ -160,13 +189,18 @@ impl PartialEq for WingsModule {
 
 impl Eq for WingsModule {}
 
+/// Holds a set of WASM plugins, managing their creation, destruction, and interop between them.
 pub struct WingsHost<H: Host> {
+    /// The WASM engine.
     engine: Engine<H::Engine>,
+    /// The ID of this host.
     id: u64,
+    /// A store for holding all WASM objects.
     store: Option<wasm_runtime_layer::Store<WingsHostInner<H>, H::Engine>>
 }
 
 impl<H: Host> WingsHost<H> {
+    /// Parses and loads a WASM module from bytes.
     pub fn load(&self, package: impl std::io::Read) -> Result<WingsModule, WingsError> {
         let module = Module::new(&self.engine, package).map_err(WingsError::from_invalid_module)?;
         let mut metadata = self.load_module_metadata(&module)?;
@@ -181,6 +215,8 @@ impl<H: Host> WingsHost<H> {
         })))
     }
 
+    /// Unloads the existing image and replaces it with the provided one.
+    /// All top-level systems in the given image will be instantiated.
     pub fn instantiate(&mut self, image: &WingsImage) {
         assert!(image.modules.iter().all(|x| self.id == x.0.host_id), "Image contained modules from another host");
         if let Err(error) = self.clear_image() {
@@ -191,6 +227,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Checks to ensure that no top-level systems are instantiated more than once.
     fn check_group_instantiates_duplicates(&self, group_instantiates: &[InstantiateGroup]) -> Result<(), WingsError> {
         for group in group_instantiates {
             for i in 1..group.systems.len() {
@@ -205,6 +242,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Gathers all instantiation groups together into the given list.
     fn collate_group_instantiates(&self, group_instantiates: &mut Vec<InstantiateGroup>) {
         let mut i = 1;
         while i < group_instantiates.len() {
@@ -219,12 +257,15 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Attempts to unload all systems. If a panic occurs during unload,
+    /// the remaining systems will be forgotten without being dropped.
     fn clear_image(&mut self) -> Result<(), WingsError> {
         let result = self.drop_systems();
         self.reset_store();
         result
     }
 
+    /// Invokes the drop procedure on all systems in reverse topological order.
     fn drop_systems(&mut self) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
 
@@ -237,6 +278,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Loads metadata about all systems and groups within the given module.
     fn load_module_metadata(&self, module: &Module) -> Result<ModuleMetadata, WingsError> {
         let mut store = wasm_runtime_layer::Store::new(&self.engine, ());
         let dummy_imports = self.create_dummy_imports(&mut store, module)?;
@@ -267,6 +309,7 @@ impl<H: Host> WingsHost<H> {
         })
     }
 
+    /// Creates a set of dummy imports for inspecting a module's metadata without executing its contents.
     fn create_dummy_imports<C: AsContextMut>(&self, mut ctx: C, module: &Module) -> Result<Imports, WingsError> {
         let mut imports = Imports::new();
         for import in module.imports(&self.engine) {
@@ -279,6 +322,7 @@ impl<H: Host> WingsHost<H> {
         Ok(imports)
     }
 
+    /// Gathers all of the event handlers from the image into the store.
     fn fill_event_handlers(&mut self, image: &WingsImage, types: &[DisjointExportedType]) {
         let store = self.store.as_mut().expect("Failed to get store");
         let data = store.data_mut();
@@ -296,6 +340,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Gathers all of the system traits from the image into the store.
     fn fill_system_traits(&mut self, image: &WingsImage, types: &[DisjointExportedType]) -> Result<FxHashMap<DisjointExportedType, u32>, WingsError> {
         let store = self.store.as_mut().expect("Failed to get store");
         let data = store.data_mut();
@@ -327,6 +372,7 @@ impl<H: Host> WingsHost<H> {
         Ok(trait_map)
     }
 
+    /// Instantiates the modules from the image with the current store.
     fn instantiate_modules(&mut self, image: &WingsImage) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
         store.data_mut().instance_funcs.reserve(image.modules.len());
@@ -343,6 +389,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Instantiates the systems from the image in the provided order.
     fn instantiate_systems(&mut self, image: &WingsImage, order: &[DisjointExportedType], trait_map: &FxHashMap<DisjointExportedType, u32>) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
         for ty in order {
@@ -386,6 +433,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Gathers references to all metadata functions contained in the provided instance.
     fn metadata_functions<C: AsContextMut>(&self, mut ctx: C, instance: &Instance) -> MetadataFunctions {
         let mut describes = Vec::new();
         let mut instantiates = Vec::new();
@@ -405,6 +453,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Reads length-prefixed data from the guest memory into the provided buffer.
     fn read_marshal_buffer<C: AsContextMut>(&self, mut ctx: C, func: &Func, memory: &Memory, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
         unsafe {
             let mut result_pointer_value = [Value::I32(0)];
@@ -423,6 +472,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Resets the WASM store, forgetting all modules.
     fn reset_store(&mut self) {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
         data.ctx.as_ref().expect("Failed to get context").raise_event(on::ImageReloaded);
@@ -434,6 +484,8 @@ impl<H: Host> WingsHost<H> {
         self.store = Some(wasm_runtime_layer::Store::new(&self.engine, data));
     }
 
+    /// Generates a trait map for converting between system trait types and the underlying
+    /// concrete implementations.
     fn generate_system_trait_map(&self, image: &WingsImage) -> FxHashMap<DisjointExportedType, ExportedType> {
         let mut result: FxHashMap<DisjointExportedType, ExportedType> = HashMap::with_capacity_and_hasher(image.systems.len(), FxBuildHasher::default());
         for system in image.systems.values() {
@@ -450,6 +502,8 @@ impl<H: Host> WingsHost<H> {
         result
     }
 
+    /// Topologically sorts all required systems in the given image to determine
+    /// their instantiation order.
     fn sort_image_dependencies(&self, image: &WingsImage) -> Result<Vec<DisjointExportedType>, WingsError> {
         let trait_map = self.generate_system_trait_map(image);
         let mut sort = TopologicalSort::new();
@@ -483,6 +537,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Creates the set of imports that the host must provide to the guest.
     fn create_host_imports<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Imports {
         let mut ctx_handle = take(&mut ctx.as_context_mut().data_mut().ctx).expect("Failed to get context");
         let mut imports = H::create_imports(&mut ctx_handle, &mut ctx);
@@ -494,6 +549,7 @@ impl<H: Host> WingsHost<H> {
         imports
     }
 
+    /// Creates the inner store data for this host.
     fn create_host_inner(ctx: GeeseContextHandle<Self>) -> WingsHostInner<H> {
         let event_raisers = Self::get_event_raisers();
         let invokers = Self::get_invokers();
@@ -516,6 +572,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Creates the proxy invocation function for the host.
     fn create_invoke_proxy_func<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Func {
         Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| unsafe {
             let [Value::I32(id), Value::I32(func_index), Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
@@ -542,6 +599,7 @@ impl<H: Host> WingsHost<H> {
         })
     }
 
+    /// Creates the event invocation function for the host.
     fn create_raise_event_func<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Func {
         Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], []), move |mut ctx, params, _| unsafe {
             let [Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
@@ -558,7 +616,6 @@ impl<H: Host> WingsHost<H> {
                 raiser(inner.ctx.as_mut().expect("Failed to get context"), section_reader.section()?)?;
             }
             else {
-                drop(section_reader);
                 inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer, ty });
             }
 
@@ -566,6 +623,7 @@ impl<H: Host> WingsHost<H> {
         })
     }
 
+    /// Gets references to all internal Wings functions for the given instance.
     fn get_instance_funcs<C: AsContextMut>(mut ctx: C, instance: &Instance) -> Result<InstanceFuncs, WingsError> {
         let alloc_marshal_buffer = Self::get_instance_func(
             &mut ctx, instance, "__wings_alloc_marshal_buffer", FuncType::new([ValueType::I32], [ValueType::I32]))?;
@@ -587,6 +645,7 @@ impl<H: Host> WingsHost<H> {
         })
     }
 
+    /// Gets a WASM function exported from the instance with the provided name and type.
     fn get_instance_func<C: AsContextMut>(mut ctx: C, instance: &Instance, name: &str, ty: FuncType) -> Result<Func, WingsError> {
         let Some(Extern::Func(func)) = instance.get_export(&mut ctx, name)
             else { return Err(WingsError::from_invalid_module(format!("Module missing intrinsic {name}"))) };
@@ -599,11 +658,13 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Raises an error that occurred during WASM processing.
     fn handle_error(&mut self, error: WingsError) {
         self.store.as_ref().expect("Failed to get store").data().ctx.as_ref().expect("Failed to get context").raise_event(on::Error { error });
         self.reset_store();
     }
 
+    /// Invokes a proxy function within a guest instance.
     fn invoke_guest_proxy(mut ctx: &mut StoreContextMut<WingsHostInner<H>, H::Engine>, func_index: u32, system: u32, invoke: GuestPointer, v_table: GuestPointer, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
         unsafe {
             let Some(system) = ctx.data().systems.get(system as usize).copied() else { return Err(WingsError::from_trap("Invalid system ID")) };
@@ -615,7 +676,7 @@ impl<H: Host> WingsHost<H> {
             let mut result = [Value::I32(0)];
             instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
             let [Value::I32(pointer)] = result else { unreachable!() };
-            memory.write(&mut ctx, pointer as usize, &buffer).map_err(WingsError::from_trap)?;
+            memory.write(&mut ctx, pointer as usize, buffer).map_err(WingsError::from_trap)?;
     
             instance_funcs.invoke_proxy_func.call(&mut ctx, &[Value::I32(invoke.into()), Value::I32(system.pointer.into()), Value::I32(v_table.into()), Value::I32(func_index as i32)], &mut result).map_err(WingsError::from_trap)?;
             let [Value::I32(size)] = result else { unreachable!() };
@@ -633,6 +694,7 @@ impl<H: Host> WingsHost<H> {
         }
     }
 
+    /// Attempts to instantiate the given image.
     fn try_instantiate(&mut self, image: &WingsImage) -> Result<(), WingsError> {
         let sorted_dependencies = self.sort_image_dependencies(image)?;
         let trait_map = self.fill_system_traits(image, &sorted_dependencies)?;
@@ -641,18 +703,21 @@ impl<H: Host> WingsHost<H> {
         self.instantiate_systems(image, &sorted_dependencies, &trait_map)
     }
 
+    /// Dispatches a strongly-typed event to all guest modules.
     fn dispatch_event<T: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned>(&mut self, event: &T) {
         if let Err(error) = bincode::serialize(&event).map_err(WingsError::Serialization).and_then(|x| self.dispatch_raw_event(&ExportedType::from(T::TYPE).into(), &x)) {
             self.handle_error(error);
         }
     }
 
+    /// Dispatches a weakly-typed event to all guest modules.
     fn dispatch_guest_event(&mut self, event: &on::GuestEvent) {
         if let Err(error) = self.dispatch_raw_event(&event.ty, &event.buffer) {
             self.handle_error(error);
         }
     }
 
+    /// Dispatches a serialized event to all guest modules.
     fn dispatch_raw_event(&mut self, ty: &DisjointExportedType, buffer: &[u8]) -> Result<(), WingsError> {
         if let Some(handler_list) = self.store.as_ref().expect("Failed to get store").data().guest_event_handlers.get(ty).cloned() {
             self.lower_raw_event_buffer(&handler_list, buffer)?;
@@ -662,6 +727,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Stores the provided event data into every relevant instance's event object buffer.
     fn lower_raw_event_buffer(&mut self, handler_list: &EventHandlerList, buffer: &[u8]) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
 
@@ -683,6 +749,7 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Invokes all event handlers in the provided list.
     fn invoke_event_handlers(&mut self, handler_list: &EventHandlerList) -> Result<(), WingsError> {
         let mut store = self.store.as_mut().expect("Failed to get store");
         
@@ -695,10 +762,12 @@ impl<H: Host> WingsHost<H> {
         Ok(())
     }
 
+    /// Gets a mapping from exported type to event raiser for this host.
     fn get_event_raisers() -> FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>> {
         FxHashMap::from_iter(H::EVENTS.event_raisers.iter().map(|x| (ExportedType::from(x.ty).into(), x.raise)))
     }
 
+    /// Gets a list of all exported system traits for this host.
     fn get_invokers() -> Vec<HostSystemTrait<H>> {
         Vec::from_iter(H::SYSTEMS.traits.iter().flat_map(|x| x.iter()).copied())
     }
@@ -719,7 +788,8 @@ impl<H: Host> GeeseSystem for WingsHost<H> {
         .with(Self::dispatch_guest_event);
 
     fn new(mut ctx: GeeseContextHandle<Self>) -> Self {
-        const UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
+        /// A monotonic counter used to distinguish between hosts.
+        static UNIQUE_ID: AtomicU64 = AtomicU64::new(0);
 
         let engine = Engine::new(H::create_engine(&mut ctx));
         let id = UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
@@ -733,31 +803,46 @@ impl<H: Host> GeeseSystem for WingsHost<H> {
     }
 }
 
+/// Defines the types and functionality associated with a Wings host.
 pub trait Host: 'static + Sized {
+    /// The set of events that should be passed across the WASM boundary.
     const EVENTS: Events<Self> = events();
+
+    /// The set of systems that should be accessible across the WASM boundary.
     const SYSTEMS: Systems<Self> = systems();
 
+    /// The WASM runtime that should be used.
     type Engine: wasm_runtime_layer::backend::WasmEngine;
 
+    /// Creates the WASM runtime to use.
     fn create_engine(ctx: &mut GeeseContextHandle<WingsHost<Self>>) -> Self::Engine;
 
+    /// Creates the set of imports that every guest module should receive.
     #[allow(unused)]
     fn create_imports(ctx: &mut GeeseContextHandle<WingsHost<Self>>, store: impl AsContextMut) -> Imports {
         Imports::new()
     }
 }
 
+/// Defines the function type used to raise an event on the host from the guest.
 type HostEventRaiserFunc<H> = fn(&GeeseContextHandle<WingsHost<H>>, &[u8]) -> Result<(), WingsError>;
 
+/// Describes an event which guests should be able to pass to hosts.
 struct HostEventRaiser<H: Host> {
+    /// The type of the host-visible event.
     pub ty: StaticExportedType,
+    /// The function to use when raising the event to the host.
     pub raise: HostEventRaiserFunc<H>
 }
 
+/// Defines the function type used to call a proxy method on a host system from the guest.
 type HostInvokerFunc<H> = unsafe fn(&mut GeeseContextHandle<WingsHost<H>>, u32, *mut Vec<u8>) -> Result<(), WingsError>;
 
+/// Describes a host trait object that guests should be able to call.
 struct HostSystemTrait<H: Host> {
+    /// The type of the trait to use.
     pub ty: StaticExportedType,
+    /// The function to use when invoking proxy types.
     pub invoke: HostInvokerFunc<H>
 }
 
@@ -769,112 +854,172 @@ impl<H: Host> Clone for HostSystemTrait<H> {
     }
 }
 
+/// Describes an event handler on the guest.
 #[derive(Clone, Debug)]
 struct EventHandlerDescriptor {
+    /// The index of the guest system.
     pub system: u32,
+    /// A WASM pointer to the actual event handler function.
     pub event_func: GuestPointer,
+    /// A WASM pointer to the function used to deserialize and invoke the event handler.
     pub invoke_func: GuestPointer,
 }
 
+/// A list of guest-side event handlers for a single event type.
 #[derive(Clone, Debug, Default)]
 struct EventHandlerList {
+    /// The instances that should receive this event.
     pub instances: Vec<u32>,
+    /// The handlers that should be invoked for this event.
     pub event_handlers: Vec<EventHandlerDescriptor>
 }
 
+/// A set of all internal functions exposed by an instance.
 #[derive(Clone, Debug)]
 struct InstanceFuncs {
+    /// Allocates a certain amount of space for guest-host communication.
     pub alloc_marshal_buffer: Func,
+    /// Copies an event object out of the marshal buffer.
     pub copy_event_object: Func,
+    /// Indirectly invokes a function with one argument.
     pub invoke_func_1: Func,
+    /// Indirectly invokes a function with two arguments.
     pub invoke_func_2: Func,
+    /// Indirectly invokes a proxy function.
     pub invoke_proxy_func: Func
 }
 
+/// Holds the set of functions that describe the systems in a module.
 struct MetadataFunctions {
+    /// The functions that return system descriptors.
     pub describes: Vec<Func>,
+    /// The functions that return instantiation groups.
     pub instantiates: Vec<Func>
 }
 
+/// Describes the systems and groups declared in a module.
 #[derive(Debug)]
 struct ModuleMetadata {
+    /// Groups containing systems to instantiate.
     pub group_instantiates: Vec<InstantiateGroup>,
+    /// A list of all systems contained in the module.
     pub system_descriptors: Vec<SystemDescriptor>
 }
 
+/// References a system declared within a module.
 #[derive(Copy, Clone, Debug)]
 struct SystemEntry {
+    /// The ID of the module that has the system.
     pub module_id: u32,
+    /// The ID of the system within the module.
     pub system_id: u32,
+    /// The version of the module containing the system.
     pub version: Version
 }
 
+/// Holds an active system from an instance.
 #[derive(Copy, Clone, Debug)]
 struct SystemHolder {
+    /// The instance in which the system resides.
     pub instance: u32,
+    /// A pointer to the system in guest memory.
     pub pointer: GuestPointer,
+    /// A pointer to the system's drop function in guest memory.
     pub drop_fn: GuestPointer
 }
 
+/// Describes how a proxy function call should occur.
 #[derive(Copy, Clone, Debug)]
 enum SystemTraitHolder {
+    /// The call should invoke a guest function.
     Guest {
+        /// The ID of the system to invoke.
         system: u32,
+        /// The proxy function to invoke.
         invoke: GuestPointer,
+        /// The V-table associated with the system trait object.
         v_table: GuestPointer
     },
+    /// The call should invoke a host function.
     Host {
+        /// The ID of the host trait on which to invoke the function.
         invoker: u32
     }
 }
 
+/// Stores the inner state for a host.
 struct WingsHostInner<H: Host> {
+    /// The context handle.
     ctx: Option<GeeseContextHandle<WingsHost<H>>>,
+    /// The event raisers.
     event_raisers: FxHashMap<DisjointExportedType, HostEventRaiserFunc<H>>,
+    /// The guest event handlers.
     guest_event_handlers: FxHashMap<DisjointExportedType, EventHandlerList>,
+    /// The instance-specific functions.
     instance_funcs: Vec<InstanceFuncs>,
+    /// The host trait objects.
     invokers: Vec<HostSystemTrait<H>>,
+    /// The instance memories.
     memories: Vec<Memory>,
+    /// The instantiated systems.
     systems: Vec<SystemHolder>,
+    /// The system trait mappings.
     system_traits: Vec<SystemTraitHolder>,
 }
 
+/// Holds the inner state for a parsed module.
 #[derive(Debug)]
 struct WingsModuleInner {
+    /// The ID of the host.
     pub host_id: u64,
+    /// The underlying WASM module.
     pub module: Module,
+    /// The module metadata.
     pub metadata: ModuleMetadata
 }
 
+/// Ensures that the linker finds an implementation for the associated guest function.
 #[no_mangle]
 extern "C" fn __wings_invoke_proxy_function(_: u32, _: u32, _: GuestPointer, _: u32) {
     unreachable!()
 }
 
+/// Ensures that the linker finds an implementation for the associated guest function.
 #[no_mangle]
 extern "C" fn __wings_raise_event(_: GuestPointer, _: u32) {
     unreachable!()
 }
 
+/// Events which this module raises.
 pub mod on {
     use super::*;
 
+    /// Indicates that an error happened within a WASM plugin.
     pub struct Error {
+        /// The error that occurred.
         pub error: WingsError
     }
 
+    /// Raised whenever a new WASM image is loaded.
     pub struct ImageReloaded;
 
+    /// Stores a weakly-typed guest event, which should be raised to all
+    /// guests at the appropriate time.
     #[derive(Debug)]
     pub(crate) struct GuestEvent {
+        /// The buffer holding the event data.
         pub buffer: Vec<u8>,
+        /// The type of event.
         pub ty: DisjointExportedType
     }
 }
 
+/// Private module for hiding implementation details.
 mod private {
     use super::*;
 
+    /// Marks an event type that can cross the WASM boundary.
     pub trait HostEvent: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned + Send + Sync {}
+
     impl<T: wings_marshal::exported_type::ExportType + Serialize + DeserializeOwned + Send + Sync> HostEvent for T {}
 }

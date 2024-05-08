@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-//! Defines types to communicate between guests and the host in the `wings` plugin system.
+//! Defines types to communicate between guests and the host in the [`wings`](https://github.com/DouglasDwyer/wings) plugin system.
 
 use crate::exported_type::*;
 use serde::*;

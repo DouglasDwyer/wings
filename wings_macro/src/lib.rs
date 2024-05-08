@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-//! Defines macros for declaring traits and systems in `wings`.
+//! Defines macros for declaring traits and systems in [`wings`](https://github.com/DouglasDwyer/wings).
 
 use proc_macro2::*;
 use quote::*;
