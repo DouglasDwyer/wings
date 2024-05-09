@@ -7,7 +7,7 @@ use proc_macro2::*;
 use quote::*;
 use std::sync::atomic::*;
 use syn::*;
-use syn::parse::Parser;
+use syn::parse::*;
 use syn::punctuated::*;
 
 /// Creates a `wings_marshal::Version` object describing the current version of this crate.
@@ -103,10 +103,9 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
 #[proc_macro_attribute]
 pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let host_request = is_host_request(attr);
-    let original_trait = TokenStream::from(item.clone());
-    let item_trait = parse_macro_input!(item as ItemTrait);
+    let mut item_trait = parse_macro_input!(item as ItemTrait);
 
-    let trait_name = item_trait.ident;
+    let trait_name = item_trait.ident.clone();
     let trait_name_string = trait_name.to_string();
 
     let host_export_system = if host_request {
@@ -118,19 +117,26 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
 
     let mut function_definitions = Vec::new();
     let mut function_invocations = Vec::new();
-    for inner_item in item_trait.items {
+    let mut function_globals = Vec::new();
+
+    for inner_item in &mut item_trait.items {
         match inner_item {
             TraitItem::Fn(func_item) => {
-                let (proxy_function, invocation) = generate_proxy_function_and_invocation(function_definitions.len() as u32, func_item);
-                function_definitions.push(proxy_function);
-                function_invocations.push(invocation);
+                let generated = generate_proxy_function_implementations(function_definitions.len() as u32, &trait_name, func_item);
+                function_globals.push(generated.global);
+                function_invocations.push(generated.invoker);
+                function_definitions.push(generated.proxy);
             },
             _ => panic!("Non-function items are not supported in proxyable traits."),
         }
     }
+
+    if !host_request {
+        panic!("Cannot define global functions for non-host systems.");
+    }
     
     quote! {
-        #original_trait
+        #item_trait
 
         const _: () = {
             impl ::wings::marshal::Proxyable for dyn #trait_name {
@@ -175,6 +181,8 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
 
             #host_export_system
         };
+
+        #(#function_globals)*
     }.into()
 }
 
@@ -245,12 +253,46 @@ fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> T
 
 /// Generates the proxy function implementation and proxy invocation function
 /// for the given function item.
-fn generate_proxy_function_and_invocation(index: u32, func_item: TraitItemFn) -> (TokenStream, TokenStream) {
-    let func_args = get_non_receiver_args(&func_item);
-    let proxy_function = generate_proxy_function(index, &func_item, &func_args);
-    let invocation = generate_proxy_invocation(index, &func_item, &func_args);
+fn generate_proxy_function_implementations(index: u32, trait_name: &Ident, func_item: &mut TraitItemFn) -> ProxyFunction {
+    let global_name = remove_global_attribute(func_item);
+    let func_args = get_non_receiver_args(func_item);
+    let global = generate_global_function(trait_name, func_item, &func_args, global_name);
+    let proxy = generate_proxy_function(index, func_item, &func_args);
+    let invoker = generate_proxy_invocation(index, func_item, &func_args);
 
-    (proxy_function, invocation)
+    ProxyFunction {
+        global,
+        invoker,
+        proxy,
+    }
+}
+
+/// Generates a proxy function which can be called globally, without the use of a trait object.
+fn generate_global_function(trait_name: &Ident, func_item: &TraitItemFn, args: &FuncArgs, global_name: Option<Ident>) -> TokenStream {
+    if let Some(ident) = global_name {
+        let mut func_signature = func_item.sig.clone();
+
+        func_signature.inputs = func_signature.inputs.clone().into_iter().skip(1).collect();
+        func_signature.ident = ident;
+        
+        let mut signature = TokenStream::new();
+        func_signature.to_tokens(&mut signature);
+    
+        let func_ident = &func_item.sig.ident;
+        let arg_names = &args.original_args;
+
+        quote! {
+            pub #func_signature {
+                unsafe {
+                    <dyn #trait_name as ::wings::marshal::Proxyable>::create_proxy(::wings::marshal::proxy_index::<dyn #trait_name>())
+                        . #func_ident( #( #arg_names )* )
+                }
+            }
+        }
+    }
+    else {
+        quote! {}
+    }
 }
 
 /// Generates a proxy function for remotely calling a trait item.
@@ -432,6 +474,32 @@ fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<ExprPath> {
     }).collect()
 }
 
+/// Removes the `global` attribute macro from a trait function item.
+fn remove_global_attribute(item: &mut TraitItemFn) -> Option<Ident> {
+    let mut found_index = None;
+    for (index, attr) in item.attrs.iter().enumerate() {
+        if attr.path().get_ident().map(|x| *x == "global").unwrap_or(false) {
+            assert!(found_index.replace(index).is_none(), "Cannot have duplicate 'global' attributes on a single function");
+        }
+    }
+
+    if let Some(index) = found_index {
+        let attr = item.attrs.remove(index);
+        if let Ok(ident) = attr.parse_args::<Ident>() {
+            Some(ident)
+        }
+        else if attr.meta.require_path_only().is_ok() {
+            Some(item.sig.ident.clone())
+        }
+        else {
+            panic!("Global name not specified")
+        }
+    }
+    else {
+        None
+    }
+}
+
 /// The arguments to a trait function.
 struct FuncArgs<'a> {
     /// The types of the arguments.
@@ -440,4 +508,14 @@ struct FuncArgs<'a> {
     pub index_args: Vec<Ident>,
     /// The original argument identifiers.
     pub original_args: Vec<&'a Ident>,
+}
+
+/// Holds the token streams of procedurally-generated functions for a proxy object.
+struct ProxyFunction {
+    /// The tokens for invoking the proxy function globally, if any.
+    global: TokenStream,
+    /// The tokens for locally invoking the underlying function.
+    invoker: TokenStream,
+    /// The tokens for requesting a remote proxy call.
+    proxy: TokenStream,
 }

@@ -82,9 +82,29 @@ impl From<&StaticEventHandler> for EventHandler {
     }
 }
 
+/// Gets the proxy index of the system from the host. Assumes that the proxy is loaded at this point.
+/// 
+/// # Safety
+/// 
+/// For this function call to be sound, the marshal buffer currently
+/// must not be referenced anywhere else.
+pub unsafe fn proxy_index<T: SystemTrait + ?Sized>() -> u32 {
+    let (pointer, size) = {
+        let mut buffer = &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER);
+        buffer.clear();
+        bincode::serialize_into(&mut buffer, &T::TYPE).expect("Failed to serialize type");
+        (buffer.as_ptr().into(), buffer.len() as u32)
+    };
+    __wings_proxy_index(pointer, size)
+}
+
 extern "C" {
     /// Instructs the host to invoke a remote proxy function.
     pub fn __wings_invoke_proxy_function(id: u32, func_index: u32, pointer: GuestPointer, size: u32);
+
+    /// Gets the index of a remote proxy.
+    pub fn __wings_proxy_index(pointer: GuestPointer, size: u32) -> u32;
+
     /// Instructs the host to raise an event.
     pub(crate) fn __wings_raise_event(pointer: GuestPointer, size: u32);
 }

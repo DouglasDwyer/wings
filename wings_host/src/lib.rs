@@ -391,9 +391,11 @@ impl<H: Host> WingsHost<H> {
         data.system_traits.reserve(capacity);
 
         for invoker in &data.invokers {
+            let ty = DisjointExportedType::from(ExportedType::from(invoker.ty));
             let id = data.system_traits.len() as u32;
             data.system_traits.push(SystemTraitHolder::Host { invoker: id });
-            if trait_map.insert(ExportedType::from(invoker.ty).into(), id).is_some() {
+            data.system_trait_map.insert(ty.clone(), id);
+            if trait_map.insert(ty, id).is_some() {
                 panic!("Duplicate host dependency {:?}", invoker.ty);
             }
         }
@@ -402,9 +404,11 @@ impl<H: Host> WingsHost<H> {
             let entry = image.systems[ty];
             let descriptor = &image.modules[entry.module_id as usize].0.metadata.system_descriptors[entry.system_id as usize];
             for system_trait in &descriptor.traits {
+                let ty = DisjointExportedType::from(&system_trait.ty);
                 let id = data.system_traits.len() as u32;
                 data.system_traits.push(SystemTraitHolder::Guest { invoke: system_trait.invoke, system: entry.module_id, v_table: system_trait.v_table });
-                if trait_map.insert(DisjointExportedType::from(&system_trait.ty), id).is_some() {
+                data.system_trait_map.insert(ty.clone(), id);
+                if trait_map.insert(ty, id).is_some() {
                     return Err(WingsError::from_invalid_module("Duplicate trait implementations"));
                 }
             }
@@ -518,10 +522,11 @@ impl<H: Host> WingsHost<H> {
         let mut data = take(&mut self.store).expect("Failed to get store").into_data();
         data.ctx.as_ref().expect("Failed to get context").raise_event(on::ImageReloaded);
         data.guest_event_handlers.clear();
+        data.instance_funcs.clear();
         data.memories.clear();
         data.systems.clear();
         data.system_traits.clear();
-        data.instance_funcs.clear();
+        data.system_trait_map.clear();
         self.store = Some(wasm_runtime_layer::Store::new(&self.engine, data));
     }
 
@@ -585,6 +590,7 @@ impl<H: Host> WingsHost<H> {
         ctx.as_context_mut().data_mut().ctx = Some(ctx_handle);
 
         imports.define("env", "__wings_invoke_proxy_function", Extern::Func(Self::create_invoke_proxy_func(&mut ctx, index)));
+        imports.define("env", "__wings_proxy_index", Extern::Func(Self::create_proxy_index_func(&mut ctx, index)));
         imports.define("env", "__wings_raise_event", Extern::Func(Self::create_raise_event_func(&mut ctx, index)));
 
         imports
@@ -600,6 +606,7 @@ impl<H: Host> WingsHost<H> {
         let memories = Vec::new();
         let systems = Vec::new();
         let system_traits = Vec::new();
+        let system_trait_map = FxHashMap::default();
 
         WingsHostInner {
             ctx: Some(ctx),
@@ -609,6 +616,7 @@ impl<H: Host> WingsHost<H> {
             invokers,
             systems,
             system_traits,
+            system_trait_map,
             memories
         }
     }
@@ -635,6 +643,25 @@ impl<H: Host> WingsHost<H> {
             alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result)?;
             let [Value::I32(pointer)] = result else { unreachable!() };
             memory.write(&mut ctx, pointer as usize, &buffer)?;
+
+            Ok(())
+        })
+    }
+
+    /// Creates the proxy invocation function for the host.
+    fn create_proxy_index_func<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Func {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], [ValueType::I32]), move |mut ctx, params, results| unsafe {
+            let [Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
+            let len = *size as usize;
+            let mut buffer = Vec::with_capacity(len);
+            buffer.set_len(len);
+            let memory = ctx.data().memories[index].clone();
+            memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
+
+            let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(&buffer)?);
+
+            let data = ctx.data();
+            results[0] = Value::I32(*data.system_trait_map.get(&ty).ok_or_else(|| WingsError::from_trap("Invalid proxy type"))? as i32);
 
             Ok(())
         })
@@ -1020,6 +1047,8 @@ struct WingsHostInner<H: Host> {
     systems: Vec<SystemHolder>,
     /// The system trait mappings.
     system_traits: Vec<SystemTraitHolder>,
+    /// A mapping from system trait type to index.
+    system_trait_map: FxHashMap<DisjointExportedType, u32>
 }
 
 /// Holds the inner state for a parsed module.
@@ -1036,6 +1065,12 @@ struct WingsModuleInner {
 /// Ensures that the linker finds an implementation for the associated guest function.
 #[no_mangle]
 extern "C" fn __wings_invoke_proxy_function(_: u32, _: u32, _: GuestPointer, _: u32) {
+    unreachable!()
+}
+
+/// Ensures that the linker finds an implementation for the associated guest function.
+#[no_mangle]
+extern "C" fn __wings_proxy_index(_: GuestPointer, _: u32) -> u32 {
     unreachable!()
 }
 

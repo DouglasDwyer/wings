@@ -99,14 +99,14 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "example_host_system"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "wings",
 ]
 
 [[package]]
 name = "example_plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "example_host_system",
  "wings",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "wings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "const_list",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "wings_example"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "example_host_system",
  "geese",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "wings_host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "const_list",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "wings_macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "wings_marshal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bincode",
  "serde",

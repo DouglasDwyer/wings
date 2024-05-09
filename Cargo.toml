@@ -12,7 +12,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/DouglasDwyer/wings"
 readme = "README.md"
@@ -25,11 +25,11 @@ WASM plugin system for Geese.
 # Internal dependencies
 example_host_system = { path = "wings_example/example_host_system" }
 example_plugin = { path = "wings_example/example_plugin" }
-wings = { path = ".", version = "0.1.0" }
-wings_example = { path = "wings_example", version = "0.1.0" }
-wings_host = { path = "wings_host", version = "0.1.0" }
-wings_macro = { path = "wings_macro", version = "0.1.0" }
-wings_marshal = { path = "wings_marshal", version = "0.1.0" }
+wings = { path = ".", version = "0.1.1" }
+wings_example = { path = "wings_example", version = "0.1.1" }
+wings_host = { path = "wings_host", version = "0.1.1" }
+wings_macro = { path = "wings_macro", version = "0.1.1" }
+wings_marshal = { path = "wings_marshal", version = "0.1.1" }
 
 # External dependencies
 
@@ -40,7 +40,7 @@ geese = { version = "0.3.9", default-features = false }
 quote = { version = "1.0.36", default-features = false }
 proc-macro2 = { version = "1.0.81", default-features = false }
 serde = { version = "1.0.199", default-features = false, features = [ "derive" ] }
-syn = { version = "2.0.60", default-features = false, features = [ "derive", "full", "parsing", "printing", "proc-macro" ] }
+syn = { version = "2.0.60", default-features = false, features = [ "clone-impls", "derive", "full", "parsing", "printing", "proc-macro" ] }
 thiserror = { version = "1.0.59", default-features = false }
 topological-sort = { version = "0.2.2", default-features = false }
 wasm_runtime_layer = { version = "0.3.0", default-features = false }
