@@ -412,8 +412,8 @@ unsafe extern "C" fn __wings_invoke_func_2(func: fn(GuestPointer, GuestPointer) 
 /// Invokes a proxy function, passing in the given arguments as well as a reference to the marshal buffer.
 #[allow(improper_ctypes_definitions)]
 #[no_mangle]
-unsafe extern "C" fn __wings_invoke_proxy_func(func: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>), pointer: FatGuestPointer, func_index: u32) -> u32 {
-    func(pointer, func_index, &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER));
+unsafe extern "C" fn __wings_invoke_proxy_func(func: unsafe fn(FatGuestPointer, u32, *mut Vec<u8>), pointer: GuestPointer, metadata: GuestPointer, func_index: u32) -> u32 {
+    func(FatGuestPointer::new(pointer, metadata), func_index, &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER));
     (*std::ptr::addr_of_mut!(MARSHAL_BUFFER)).len() as u32
 }
 

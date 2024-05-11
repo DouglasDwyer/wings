@@ -10,7 +10,6 @@ description.workspace = true
 [dependencies]
 geese.workspace = true
 example_host_system.workspace = true
-wasm_runtime_layer = { workspace = true, features = [ "backend_wasmi" ] }
-wasmi.workspace = true
+wasmi_runtime_layer.workspace = true
 wings.workspace = true
 wings_host.workspace = true

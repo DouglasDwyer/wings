@@ -1,4 +1,3 @@
-#![allow(clippy::uninit_vec)]
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
@@ -10,6 +9,7 @@ use geese::*;
 use private::*;
 use ::serde::*;
 use ::serde::de::*;
+use std::cell::*;
 use std::collections::*;
 use std::marker::*;
 use std::mem::*;
@@ -124,8 +124,11 @@ impl<H: Host, S: GeeseSystem> Traits<H, S> {
     }
 
     /// Performs a proxy invocation on the system via the given trait.
-    unsafe fn invoke<T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError> where S: AsMut<T> {
-        ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
+    #[allow(clippy::ptr_arg)]
+    fn invoke<T: Proxyable + SystemTrait + ?Sized>(ctx: &mut GeeseContextHandle<WingsHost<H>>, func_index: u32, buffer: &mut Vec<u8>) -> Result<(), WingsError> where S: AsMut<T> {
+        unsafe {
+            ctx.get_mut::<S>().as_mut().invoke(func_index, buffer)
+        }
     }
 }
 
@@ -288,7 +291,7 @@ impl<H: Host> WingsHost<H> {
         let mut i = 1;
         while i < group_instantiates.len() {
             let current = &group_instantiates[i];
-            if let Some(index) = group_instantiates[0..i].iter().position(|x| x.group_ty == current.group_ty) {
+            if let Some(index) = group_instantiates[..i].iter().position(|x| x.group_ty == current.group_ty) {
                 let old = group_instantiates.swap_remove(index);
                 group_instantiates[index].systems.extend(old.systems);
             }
@@ -500,21 +503,21 @@ impl<H: Host> WingsHost<H> {
 
     /// Reads length-prefixed data from the guest memory into the provided buffer.
     fn read_marshal_buffer<C: AsContextMut>(&self, mut ctx: C, func: &Func, memory: &Memory, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
-        unsafe {
-            let mut result_pointer_value = [Value::I32(0)];
-            func.call(&mut ctx, &[], &mut result_pointer_value).map_err(WingsError::from_invalid_module)?;
-    
-            let Value::I32(result_pointer) = result_pointer_value[0] else { return Err(WingsError::from_invalid_module("Describe function returned wrong type")) };
-            let result_offset = result_pointer as usize;
-            let mut total_len = [0; size_of::<u32>()];
-            memory.read(&mut ctx, result_offset, &mut total_len).map_err(WingsError::from_invalid_module)?;
-    
-            let data_len = u32::from_le_bytes(total_len) as usize;
-            buffer.clear();
-            buffer.reserve(data_len);
-            buffer.set_len(data_len);
-            memory.read(&mut ctx, result_offset + total_len.len(), buffer).map_err(WingsError::from_invalid_module)
+        let mut result_pointer_value = [Value::I32(0)];
+        func.call(&mut ctx, &[], &mut result_pointer_value).map_err(WingsError::from_invalid_module)?;
+
+        let Value::I32(result_pointer) = result_pointer_value[0] else { return Err(WingsError::from_invalid_module("Describe function returned wrong type")) };
+        let result_offset = result_pointer as usize;
+        let mut total_len = [0; size_of::<u32>()];
+        memory.read(&mut ctx, result_offset, &mut total_len).map_err(WingsError::from_invalid_module)?;
+
+        let data_len = u32::from_le_bytes(total_len) as usize;
+        
+        if buffer.len() < data_len {
+            buffer.resize(data_len, 0);
         }
+
+        memory.read(&mut ctx, result_offset + total_len.len(), &mut buffer[..data_len]).map_err(WingsError::from_invalid_module)
     }
 
     /// Resets the WASM store, forgetting all modules.
@@ -623,11 +626,10 @@ impl<H: Host> WingsHost<H> {
 
     /// Creates the proxy invocation function for the host.
     fn create_invoke_proxy_func<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Func {
-        Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| unsafe {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 4], []), move |mut ctx, params, _| {
             let [Value::I32(id), Value::I32(func_index), Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
-            let mut buffer = Vec::with_capacity(len);
-            buffer.set_len(len);
+            let mut buffer = vec!(0; len);
             let memory = ctx.data().memories[index].clone();
             memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
 
@@ -650,44 +652,44 @@ impl<H: Host> WingsHost<H> {
 
     /// Creates the proxy invocation function for the host.
     fn create_proxy_index_func<C: AsContextMut<UserState = WingsHostInner<H>, Engine = H::Engine>>(mut ctx: C, index: usize) -> Func {
-        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], [ValueType::I32]), move |mut ctx, params, results| unsafe {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], [ValueType::I32]), move |mut ctx, params, results| {
             let [Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
-            let mut buffer = Vec::with_capacity(len);
-            buffer.set_len(len);
-            let memory = ctx.data().memories[index].clone();
-            memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
-
-            let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(&buffer)?);
-
-            let data = ctx.data();
-            results[0] = Value::I32(*data.system_trait_map.get(&ty).ok_or_else(|| WingsError::from_trap("Invalid proxy type"))? as i32);
-
-            Ok(())
+            with_marshal_slice(len, |buffer| {
+                let memory = ctx.data().memories[index].clone();
+                memory.read(&mut ctx, *pointer as usize, buffer)?;
+    
+                let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(buffer)?);
+    
+                let data = ctx.data();
+                results[0] = Value::I32(*data.system_trait_map.get(&ty).ok_or_else(|| WingsError::from_trap("Invalid proxy type"))? as i32);
+    
+                Ok(())
+            })
         })
     }
 
     /// Creates the event invocation function for the host.
     fn create_raise_event_func<C: AsContextMut<UserState = WingsHostInner<H>>>(mut ctx: C, index: usize) -> Func {
-        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], []), move |mut ctx, params, _| unsafe {
+        Func::new(&mut ctx, FuncType::new([ValueType::I32; 2], []), move |mut ctx, params, _| {
             let [Value::I32(pointer), Value::I32(size)] = params else { unreachable!() };
             let len = *size as usize;
-            let mut buffer = Vec::with_capacity(len);
-            buffer.set_len(len);
-            let memory = ctx.data().memories[index].clone();
-            memory.read(&mut ctx, *pointer as usize, &mut buffer)?;
-
-            let mut section_reader = SectionedBufferReader::new(&buffer);
-            let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(section_reader.section()?)?);
-            let inner = ctx.data_mut();
-            if let Some(raiser) = inner.event_raisers.get(&ty) {
-                raiser(inner.ctx.as_mut().expect("Failed to get context"), section_reader.section()?)?;
-            }
-            else {
-                inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer, ty });
-            }
-
-            Ok(())
+            with_marshal_slice(len, |buffer| {
+                let memory = ctx.data().memories[index].clone();
+                memory.read(&mut ctx, *pointer as usize, buffer)?;
+    
+                let mut section_reader = SectionedBufferReader::new(buffer);
+                let ty = DisjointExportedType::from(bincode::deserialize::<ExportedType>(section_reader.section()?)?);
+                let inner = ctx.data_mut();
+                if let Some(raiser) = inner.event_raisers.get(&ty) {
+                    raiser(inner.ctx.as_mut().expect("Failed to get context"), section_reader.section()?)?;
+                }
+                else {
+                    inner.ctx.as_ref().expect("Failed to get context").raise_event(on::GuestEvent { buffer: buffer.to_vec(), ty });
+                }
+    
+                Ok(())
+            })
         })
     }
 
@@ -722,7 +724,7 @@ impl<H: Host> WingsHost<H> {
             Ok(func)
         }
         else {
-            Err(WingsError::from_invalid_module(format!("Module intrinsic {name} had invalid signature")))
+            Err(WingsError::from_invalid_module(format!("Module intrinsic {name} had invalid signature: {:?}", func.ty(&mut ctx))))
         }
     }
 
@@ -734,32 +736,32 @@ impl<H: Host> WingsHost<H> {
 
     /// Invokes a proxy function within a guest instance.
     fn invoke_guest_proxy(mut ctx: &mut StoreContextMut<WingsHostInner<H>, H::Engine>, func_index: u32, system: u32, invoke: GuestPointer, v_table: GuestPointer, buffer: &mut Vec<u8>) -> Result<(), WingsError> {
-        unsafe {
-            let Some(system) = ctx.data().systems.get(system as usize).copied() else { return Err(WingsError::from_trap("Invalid system ID")) };
+        let Some(system) = ctx.data().systems.get(system as usize).copied() else { return Err(WingsError::from_trap("Invalid system ID")) };
     
-            let index = system.instance as usize;
-            let instance_funcs = ctx.data().instance_funcs[index].clone();
-            let memory = ctx.data().memories[index].clone();
-    
-            let mut result = [Value::I32(0)];
-            instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
-            let [Value::I32(pointer)] = result else { unreachable!() };
-            memory.write(&mut ctx, pointer as usize, buffer).map_err(WingsError::from_trap)?;
-    
-            instance_funcs.invoke_proxy_func.call(&mut ctx, &[Value::I32(invoke.into()), Value::I32(system.pointer.into()), Value::I32(v_table.into()), Value::I32(func_index as i32)], &mut result).map_err(WingsError::from_trap)?;
-            let [Value::I32(size)] = result else { unreachable!() };
-    
-            instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(size)], &mut result).map_err(WingsError::from_trap)?;
-            let [Value::I32(pointer)] = result else { unreachable!() };
-    
-            let len: usize = size as usize;
-            buffer.clear();
-            buffer.reserve(len);
-            buffer.set_len(len);
-            memory.read(&mut ctx, pointer as usize, buffer).map_err(WingsError::from_trap)?;
-    
-            Ok(())
+        let index = system.instance as usize;
+        let instance_funcs = ctx.data().instance_funcs[index].clone();
+        let memory = ctx.data().memories[index].clone();
+
+        let mut result = [Value::I32(0)];
+        instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(buffer.len() as i32)], &mut result).map_err(WingsError::from_trap)?;
+        let [Value::I32(pointer)] = result else { unreachable!() };
+        memory.write(&mut ctx, pointer as usize, buffer).map_err(WingsError::from_trap)?;
+
+        instance_funcs.invoke_proxy_func.call(&mut ctx, &[Value::I32(invoke.into()), Value::I32(system.pointer.into()), Value::I32(v_table.into()), Value::I32(func_index as i32)], &mut result).map_err(WingsError::from_trap)?;
+        let [Value::I32(size)] = result else { unreachable!() };
+
+        instance_funcs.alloc_marshal_buffer.call(&mut ctx, &[Value::I32(size)], &mut result).map_err(WingsError::from_trap)?;
+        let [Value::I32(pointer)] = result else { unreachable!() };
+
+        let len = size as usize;
+        
+        if buffer.len() < len {
+            buffer.resize(len, 0);
         }
+
+        memory.read(&mut ctx, pointer as usize, &mut buffer[..len]).map_err(WingsError::from_trap)?;
+
+        Ok(())
     }
 
     /// Attempts to instantiate the given image.
@@ -918,7 +920,7 @@ impl<H: Host> Clone for HostEventRaiser<H> {
 }
 
 /// Defines the function type used to call a proxy method on a host system from the guest.
-type HostInvokerFunc<H> = unsafe fn(&mut GeeseContextHandle<WingsHost<H>>, u32, *mut Vec<u8>) -> Result<(), WingsError>;
+type HostInvokerFunc<H> = fn(&mut GeeseContextHandle<WingsHost<H>>, u32, &mut Vec<u8>) -> Result<(), WingsError>;
 
 /// Describes a host trait object that guests should be able to call.
 struct HostSystemTrait<H: Host> {
@@ -1060,6 +1062,22 @@ struct WingsModuleInner {
     pub module: Module,
     /// The module metadata.
     pub metadata: ModuleMetadata
+}
+
+thread_local! {
+    /// A buffer for copying data between the guest and the host.
+    static MARSHAL_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Obtains a temporary buffer of the given size and passes it to the provided function for use.
+fn with_marshal_slice<T>(size: usize, f: impl FnOnce(&mut [u8]) -> T) -> T {
+    MARSHAL_BUFFER.with_borrow_mut(|value| {
+        if value.len() < size {
+            value.resize(size, 0);
+        }
+
+        f(&mut value[..size])
+    })
 }
 
 /// Ensures that the linker finds an implementation for the associated guest function.

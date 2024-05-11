@@ -14,10 +14,10 @@ impl Host for TestHost {
         .with::<ExampleSystemImpl>(traits()
             .with::<dyn example_host_system::ExampleSystem>());
 
-    type Engine = wasmi::Engine;
+    type Engine = wasmi_runtime_layer::Engine;
 
     fn create_engine(_: &mut GeeseContextHandle<WingsHost<Self>>) -> Self::Engine {
-        wasmi::Engine::new(&wasmi::Config::default())
+        wasmi_runtime_layer::Engine::default()
     }
 }
 

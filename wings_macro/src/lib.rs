@@ -285,7 +285,7 @@ fn generate_global_function(trait_name: &Ident, func_item: &TraitItemFn, args: &
             pub #func_signature {
                 unsafe {
                     <dyn #trait_name as ::wings::marshal::Proxyable>::create_proxy(::wings::marshal::proxy_index::<dyn #trait_name>())
-                        . #func_ident( #( #arg_names )* )
+                        . #func_ident( #( #arg_names , )* )
                 }
             }
         }

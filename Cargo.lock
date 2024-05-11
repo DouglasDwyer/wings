@@ -99,14 +99,14 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "example_host_system"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "wings",
 ]
 
 [[package]]
 name = "example_plugin"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "example_host_system",
  "wings",
@@ -503,15 +503,14 @@ checksum = "af190c94f2773fdb3729c55b007a722abb5384da03bc0986df4c289bf5567e96"
 
 [[package]]
 name = "wasm_runtime_layer"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8780c443079ea2ac14ed85f168f95e0854758d780909f242d5db4e6bd41c83b"
+checksum = "bb3c4a317e94b170cd61e5943b3f80bcc5c4052398a271e6e2118a3e63a34433"
 dependencies = [
  "anyhow",
  "fxhash",
  "ref-cast",
  "smallvec",
- "wasmi",
 ]
 
 [[package]]
@@ -570,6 +569,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmi_runtime_layer"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d4af0589780a5b6d0676aec939b82fbb8c7cefb5d0e6157c1b858ab2ec16dd3"
+dependencies = [
+ "anyhow",
+ "ref-cast",
+ "smallvec",
+ "wasm_runtime_layer",
+ "wasmi",
+]
+
+[[package]]
 name = "wasmparser-nostd"
 version = "0.100.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "wings"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bincode",
  "const_list",
@@ -601,19 +613,18 @@ dependencies = [
 
 [[package]]
 name = "wings_example"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "example_host_system",
  "geese",
- "wasm_runtime_layer",
- "wasmi",
+ "wasmi_runtime_layer",
  "wings",
  "wings_host",
 ]
 
 [[package]]
 name = "wings_host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bincode",
  "const_list",
@@ -627,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "wings_macro"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -636,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "wings_marshal"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bincode",
  "serde",
