@@ -6,17 +6,29 @@
 use proc_macro2::*;
 use quote::*;
 use std::sync::atomic::*;
-use syn::*;
 use syn::parse::*;
 use syn::punctuated::*;
+use syn::*;
 
 /// Creates a `wings_marshal::Version` object describing the current version of this crate.
 #[proc_macro]
 pub fn crate_version(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     assert!(input.is_empty(), "Unrecognized arguments");
-    let major: u32 = std::env::var("CARGO_PKG_VERSION_MAJOR").ok().as_deref().and_then(|x| x.parse().ok()).expect("Failed to parse crate major version.");
-    let minor: u32 = std::env::var("CARGO_PKG_VERSION_MINOR").ok().as_deref().and_then(|x| x.parse().ok()).expect("Failed to parse crate major version.");
-    let patch: u32 = std::env::var("CARGO_PKG_VERSION_PATCH").ok().as_deref().and_then(|x| x.parse().ok()).expect("Failed to parse crate major version.");
+    let major: u32 = std::env::var("CARGO_PKG_VERSION_MAJOR")
+        .ok()
+        .as_deref()
+        .and_then(|x| x.parse().ok())
+        .expect("Failed to parse crate major version.");
+    let minor: u32 = std::env::var("CARGO_PKG_VERSION_MINOR")
+        .ok()
+        .as_deref()
+        .and_then(|x| x.parse().ok())
+        .expect("Failed to parse crate major version.");
+    let patch: u32 = std::env::var("CARGO_PKG_VERSION_PATCH")
+        .ok()
+        .as_deref()
+        .and_then(|x| x.parse().ok())
+        .expect("Failed to parse crate major version.");
 
     quote! {
         ::wings::marshal::Version {
@@ -24,12 +36,16 @@ pub fn crate_version(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
             minor: #minor,
             patch: #patch
         }
-    }.into()
+    }
+    .into()
 }
 
 /// Exports the provided type, allowing it to be used as an event or system type.
 #[proc_macro_attribute]
-pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn export_type(
+    _: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let original_item = TokenStream::from(item.clone());
     let item_type = parse_macro_input!(item as DeriveInput);
     let name = &item_type.ident;
@@ -51,7 +67,10 @@ pub fn export_type(_: proc_macro::TokenStream, item: proc_macro::TokenStream) ->
 
 /// Exports the provided system, allowing `wings` to instantiate it and other systems to access it.
 #[proc_macro_attribute]
-pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn export_system(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let system_traits = get_system_traits(attr);
     let original_item = TokenStream::from(item.clone());
 
@@ -101,7 +120,10 @@ pub fn export_system(attr: proc_macro::TokenStream, item: proc_macro::TokenStrea
 
 /// Marks this trait as an interface through which plugins can access a system.
 #[proc_macro_attribute]
-pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn system_trait(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let host_request = is_host_request(attr);
     let mut item_trait = parse_macro_input!(item as ItemTrait);
 
@@ -110,8 +132,7 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
 
     let host_export_system = if host_request {
         generate_host_export_system(&trait_name, &trait_name_string)
-    }
-    else {
+    } else {
         TokenStream::new()
     };
 
@@ -122,11 +143,15 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
     for inner_item in &mut item_trait.items {
         match inner_item {
             TraitItem::Fn(func_item) => {
-                let generated = generate_proxy_function_implementations(function_definitions.len() as u32, &trait_name, func_item);
+                let generated = generate_proxy_function_implementations(
+                    function_definitions.len() as u32,
+                    &trait_name,
+                    func_item,
+                );
                 function_globals.push(generated.global);
                 function_invocations.push(generated.invoker);
                 function_definitions.push(generated.proxy);
-            },
+            }
             _ => panic!("Non-function items are not supported in proxyable traits."),
         }
     }
@@ -134,7 +159,7 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
     if !host_request {
         panic!("Cannot define global functions for non-host systems.");
     }
-    
+
     quote! {
         #item_trait
 
@@ -190,17 +215,31 @@ pub fn system_trait(attr: proc_macro::TokenStream, item: proc_macro::TokenStream
 /// when creating the given system group.
 #[proc_macro]
 pub fn instantiate_systems(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(input)
+    let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated
+        .parse(input)
         .expect("Failed to parse system traits");
 
-    let [first, second] = system_trait_tuple.into_iter().collect::<Vec<_>>().try_into().ok().expect("Invalid number of arguments");
-    let Expr::Path(group_path) = first else { panic!("Invalid group type") };
-    let Expr::Array(systems) = second else { panic!("Invalid system array") };
+    let [first, second] = system_trait_tuple
+        .into_iter()
+        .collect::<Vec<_>>()
+        .try_into()
+        .ok()
+        .expect("Invalid number of arguments");
+    let Expr::Path(group_path) = first else {
+        panic!("Invalid group type")
+    };
+    let Expr::Array(systems) = second else {
+        panic!("Invalid system array")
+    };
 
-    let system_paths = systems.elems.into_iter().map(|x| match x {
-        Expr::Path(y) => y,
-        _ => panic!("Expected system type identifier")
-    }).collect::<Vec<_>>();
+    let system_paths = systems
+        .elems
+        .into_iter()
+        .map(|x| match x {
+            Expr::Path(y) => y,
+            _ => panic!("Expected system type identifier"),
+        })
+        .collect::<Vec<_>>();
 
     let instantiate_id = crate_unique_id("__wings_instantiate");
 
@@ -224,17 +263,29 @@ fn crate_unique_id(prefix: &str) -> Ident {
     static UNIQUE_ID: AtomicUsize = AtomicUsize::new(0);
 
     let crate_name = std::env::var("CARGO_CRATE_NAME").expect("Failed to get crate name");
-    Ident::new(&format!("{prefix}_{}_{crate_name}_{}", crate_name.len(), UNIQUE_ID.fetch_add(1, Ordering::Relaxed)), Span::call_site())
+    Ident::new(
+        &format!(
+            "{prefix}_{}_{crate_name}_{}",
+            crate_name.len(),
+            UNIQUE_ID.fetch_add(1, Ordering::Relaxed)
+        ),
+        Span::call_site(),
+    )
 }
 
 /// Determines based upon arguments to `system_trait` whether this is a host trait.
 fn is_host_request(attr: proc_macro::TokenStream) -> bool {
     if attr.is_empty() {
         false
-    }
-    else {
-        let ident_name = parse::<Ident>(attr).expect("Failed to parse attribute parameter.").to_string();
-        assert!(ident_name == "host", "Invalid attribute parameter '{}'", ident_name);
+    } else {
+        let ident_name = parse::<Ident>(attr)
+            .expect("Failed to parse attribute parameter.")
+            .to_string();
+        assert!(
+            ident_name == "host",
+            "Invalid attribute parameter '{}'",
+            ident_name
+        );
         true
     }
 }
@@ -253,7 +304,11 @@ fn generate_host_export_system(trait_name: &Ident, trait_name_string: &str) -> T
 
 /// Generates the proxy function implementation and proxy invocation function
 /// for the given function item.
-fn generate_proxy_function_implementations(index: u32, trait_name: &Ident, func_item: &mut TraitItemFn) -> ProxyFunction {
+fn generate_proxy_function_implementations(
+    index: u32,
+    trait_name: &Ident,
+    func_item: &mut TraitItemFn,
+) -> ProxyFunction {
     let global_name = remove_global_attribute(func_item);
     let func_args = get_non_receiver_args(func_item);
     let global = generate_global_function(trait_name, func_item, &func_args, global_name);
@@ -268,16 +323,21 @@ fn generate_proxy_function_implementations(index: u32, trait_name: &Ident, func_
 }
 
 /// Generates a proxy function which can be called globally, without the use of a trait object.
-fn generate_global_function(trait_name: &Ident, func_item: &TraitItemFn, args: &FuncArgs, global_name: Option<Ident>) -> TokenStream {
+fn generate_global_function(
+    trait_name: &Ident,
+    func_item: &TraitItemFn,
+    args: &FuncArgs,
+    global_name: Option<Ident>,
+) -> TokenStream {
     if let Some(ident) = global_name {
         let mut func_signature = func_item.sig.clone();
 
         func_signature.inputs = func_signature.inputs.clone().into_iter().skip(1).collect();
         func_signature.ident = ident;
-        
+
         let mut signature = TokenStream::new();
         func_signature.to_tokens(&mut signature);
-    
+
         let func_ident = &func_item.sig.ident;
         let arg_names = &args.original_args;
 
@@ -289,17 +349,24 @@ fn generate_global_function(trait_name: &Ident, func_item: &TraitItemFn, args: &
                 }
             }
         }
-    }
-    else {
+    } else {
         quote! {}
     }
 }
 
 /// Generates a proxy function for remotely calling a trait item.
 fn generate_proxy_function(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
-    let rebind_arguments = (0..args.original_args.len()).map(|x| generate_rebind_argument(x, args)).collect::<Vec<_>>();
-    let lower_arguments = args.index_args.iter().map(generate_lower_argument).collect::<Vec<_>>();
-    let lift_results = (0..args.original_args.len()).map(|x| generate_lift_result(x, args)).collect::<Vec<_>>();
+    let rebind_arguments = (0..args.original_args.len())
+        .map(|x| generate_rebind_argument(x, args))
+        .collect::<Vec<_>>();
+    let lower_arguments = args
+        .index_args
+        .iter()
+        .map(generate_lower_argument)
+        .collect::<Vec<_>>();
+    let lift_results = (0..args.original_args.len())
+        .map(|x| generate_lift_result(x, args))
+        .collect::<Vec<_>>();
     let mut signature = TokenStream::new();
     func_item.sig.to_tokens(&mut signature);
 
@@ -327,9 +394,15 @@ fn generate_proxy_function(index: u32, func_item: &TraitItemFn, args: &FuncArgs)
 /// Generates an invocation function for locally responding to a remote call.
 fn generate_proxy_invocation(index: u32, func_item: &TraitItemFn, args: &FuncArgs) -> TokenStream {
     let func_name = &func_item.sig.ident;
-    let lifted_arguments = (0..args.original_args.len()).map(|x| generate_lift_argument(x, args)).collect::<Vec<_>>();
-    let made_temporaries = (0..args.original_args.len()).map(|x| generate_make_temporary(x, args)).collect::<Vec<_>>();
-    let lowered_results = (0..args.original_args.len()).map(|x| generate_lower_result(x, args)).collect::<Vec<_>>();
+    let lifted_arguments = (0..args.original_args.len())
+        .map(|x| generate_lift_argument(x, args))
+        .collect::<Vec<_>>();
+    let made_temporaries = (0..args.original_args.len())
+        .map(|x| generate_make_temporary(x, args))
+        .collect::<Vec<_>>();
+    let lowered_results = (0..args.original_args.len())
+        .map(|x| generate_lower_result(x, args))
+        .collect::<Vec<_>>();
 
     quote! {
         if func_index == #index {
@@ -358,16 +431,16 @@ fn get_non_receiver_args(func_item: &TraitItemFn) -> FuncArgs {
                     arg_types.push(&*x.ty);
                     index_args.push(Ident::new(&format!("_arg{}", index), Span::call_site()));
                     original_args.push(&id.ident);
-                },
-                _ => panic!("Pattern bindings in proxy traits are unsupported.")
-            }
+                }
+                _ => panic!("Pattern bindings in proxy traits are unsupported."),
+            },
         }
     }
-    
+
     FuncArgs {
         arg_types,
         index_args,
-        original_args
+        original_args,
     }
 }
 
@@ -381,8 +454,7 @@ fn generate_rebind_argument(index: usize, args: &FuncArgs) -> TokenStream {
         quote! {
             let mut #index_ident = #original_ident;
         }
-    }
-    else {
+    } else {
         quote! {
             let mut #index_ident = &#original_ident;
         }
@@ -406,8 +478,7 @@ fn generate_lift_argument(index: usize, args: &FuncArgs) -> TokenStream {
         quote! {
             let mut #identifier = <#ty as ::wings::marshal::Marshal>::lift_argument(section_reader.section()?)?;
         }
-    }
-    else {
+    } else {
         quote! {
             let mut #identifier = <&#ty as ::wings::marshal::Marshal>::lift_argument(section_reader.section()?)?;
         }
@@ -423,8 +494,7 @@ fn generate_lift_result(index: usize, args: &FuncArgs) -> TokenStream {
         quote! {
             ::wings::marshal::Marshal::lift_result(&mut #identifier, section_reader.section().expect("Wings failed to get argument result section.")).expect("Wings failed to lift argument result.");
         }
-    }
-    else {
+    } else {
         quote! {}
     }
 }
@@ -439,9 +509,8 @@ fn generate_lower_result(index: usize, args: &FuncArgs) -> TokenStream {
         quote! {
             <#ty as ::wings::marshal::Marshal>::lower_result(&#identifier, section_writer.section())?;
         }
-    }
-    else {
-        quote! { }
+    } else {
+        quote! {}
     }
 }
 
@@ -455,8 +524,7 @@ fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
         quote! {
             <#ty as ::wings::marshal::Marshal>::make_temporary(&mut #identifier),
         }
-    }
-    else {
+    } else {
         quote! {
             #identifier,
         }
@@ -465,21 +533,33 @@ fn generate_make_temporary(index: usize, args: &FuncArgs) -> TokenStream {
 
 /// Gets the set of exported traits associated with a system.
 fn get_system_traits(attr: proc_macro::TokenStream) -> Vec<ExprPath> {
-    let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated.parse(attr)
+    let system_trait_tuple = Punctuated::<Expr, Token![,]>::parse_terminated
+        .parse(attr)
         .expect("Failed to parse system traits");
 
-    system_trait_tuple.into_iter().map(|x| match x {
-        Expr::Path(y) => y,
-        _ => panic!("Expected system trait name"),
-    }).collect()
+    system_trait_tuple
+        .into_iter()
+        .map(|x| match x {
+            Expr::Path(y) => y,
+            _ => panic!("Expected system trait name"),
+        })
+        .collect()
 }
 
 /// Removes the `global` attribute macro from a trait function item.
 fn remove_global_attribute(item: &mut TraitItemFn) -> Option<Ident> {
     let mut found_index = None;
     for (index, attr) in item.attrs.iter().enumerate() {
-        if attr.path().get_ident().map(|x| *x == "global").unwrap_or(false) {
-            assert!(found_index.replace(index).is_none(), "Cannot have duplicate 'global' attributes on a single function");
+        if attr
+            .path()
+            .get_ident()
+            .map(|x| *x == "global")
+            .unwrap_or(false)
+        {
+            assert!(
+                found_index.replace(index).is_none(),
+                "Cannot have duplicate 'global' attributes on a single function"
+            );
         }
     }
 
@@ -487,15 +567,12 @@ fn remove_global_attribute(item: &mut TraitItemFn) -> Option<Ident> {
         let attr = item.attrs.remove(index);
         if let Ok(ident) = attr.parse_args::<Ident>() {
             Some(ident)
-        }
-        else if attr.meta.require_path_only().is_ok() {
+        } else if attr.meta.require_path_only().is_ok() {
             Some(item.sig.ident.clone())
-        }
-        else {
+        } else {
             panic!("Global name not specified")
         }
-    }
-    else {
+    } else {
         None
     }
 }

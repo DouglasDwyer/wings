@@ -25,15 +25,18 @@ fn main() {
     if result.success() {
         let out_path = Path::new(&out_dir);
         let mut path_buf = PathBuf::from(out_path);
-        
+
         path_buf.push("wasm32-unknown-unknown/release/example_plugin.wasm");
         assert!(path_buf.exists(), "Plugin not found at path: {path_buf:?}");
 
         let wasm = read(&path_buf).expect("Could not read WASM output.");
 
-        write(out_path.join("example_plugin.rs"), format!("const EXAMPLE_PLUGIN_WASM: &[u8] = &{wasm:?};")).expect("Could not write WASM plugin bytes.");
-    }
-    else {
+        write(
+            out_path.join("example_plugin.rs"),
+            format!("const EXAMPLE_PLUGIN_WASM: &[u8] = &{wasm:?};"),
+        )
+        .expect("Could not write WASM plugin bytes.");
+    } else {
         panic!("Failed to generate WASM plugin.");
     }
 }

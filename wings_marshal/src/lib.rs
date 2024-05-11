@@ -4,8 +4,8 @@
 //! Defines types to communicate between guests and the host in the [`wings`](https://github.com/DouglasDwyer/wings) plugin system.
 
 use crate::exported_type::*;
-use serde::*;
 use serde::de::*;
+use serde::*;
 use std::mem::*;
 use std::ops::*;
 use thiserror::*;
@@ -74,16 +74,12 @@ impl FatGuestPointer {
 
     /// Casts this value to a typed pointer.
     pub fn cast<T: ?Sized>(self) -> *const T {
-        unsafe {
-            (&self.0 as *const _ as *const *const T).read()
-        }
+        unsafe { (&self.0 as *const _ as *const *const T).read() }
     }
 
     /// Casts this value to a mutable typed pointer.
     pub fn cast_mut<T: ?Sized>(self) -> *mut T {
-        unsafe {
-            (&self.0 as *const _ as *const *mut T).read()
-        }
+        unsafe { (&self.0 as *const _ as *const *mut T).read() }
     }
 }
 
@@ -122,7 +118,7 @@ pub struct InstantiateGroup {
     /// The type denoting which kind of instantiation group this is.
     pub group_ty: ExportedType,
     /// The set of systems to instantiate.
-    pub systems: Vec<ExportedType>
+    pub systems: Vec<ExportedType>,
 }
 
 /// Describes a guest system.
@@ -139,7 +135,7 @@ pub struct SystemDescriptor {
     /// The event handlers for this system.
     pub event_handlers: Vec<EventHandler>,
     /// The set of traits through which this system is exported.
-    pub traits: Vec<SystemTraitDescriptor>
+    pub traits: Vec<SystemTraitDescriptor>,
 }
 
 /// Identifies a dependency.
@@ -148,7 +144,7 @@ pub enum DependencyReference {
     /// The dependency is in the same instance and accessible via the given pointer.
     Local(FatGuestPointer),
     /// The dependency is in another instance or on the host.
-    Remote(u32)
+    Remote(u32),
 }
 
 /// Describes a system trait.
@@ -159,7 +155,7 @@ pub struct SystemTraitDescriptor {
     /// The type of the system trait.
     pub ty: ExportedType,
     /// The V-table pointer associated with the concrete trait implementation.
-    pub v_table: GuestPointer
+    pub v_table: GuestPointer,
 }
 
 /// Represents an object that may be called by proxy.
@@ -171,9 +167,9 @@ pub trait Proxyable {
     fn create_proxy(id: u32) -> Self::Proxy;
 
     /// Invokes a function that was called remotely.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// For this function call to be sound, the buffer pointer must not
     /// be dereferenced when proxy calls are made recursively.
     unsafe fn invoke(&mut self, func_index: u32, buffer: *mut Vec<u8>) -> Result<(), WingsError>;
@@ -194,8 +190,11 @@ pub trait Marshal<'a> {
     fn make_temporary(value: &'a mut Self::Temporary) -> Self;
 
     /// Serializes the result object into the buffer.
-    fn lower_result(value: &Self::Temporary, buffer: SectionedBufferWrite) -> Result<(), WingsError>;
-    
+    fn lower_result(
+        value: &Self::Temporary,
+        buffer: SectionedBufferWrite,
+    ) -> Result<(), WingsError>;
+
     /// Deserializes the result object from the buffer.
     fn lift_result(&mut self, buffer: &[u8]) -> Result<(), WingsError>;
 }
@@ -312,7 +311,10 @@ impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a mut [T] {
         &mut *value
     }
 
-    fn lower_result(value: &Self::Temporary, buffer: SectionedBufferWrite) -> Result<(), WingsError> {
+    fn lower_result(
+        value: &Self::Temporary,
+        buffer: SectionedBufferWrite,
+    ) -> Result<(), WingsError> {
         bincode::serialize_into(buffer, value).map_err(WingsError::Serialization)
     }
 
@@ -323,9 +325,10 @@ impl<'a, T: Serialize + DeserializeOwned> Marshal<'a> for &'a mut [T] {
                 *old = new;
             }
             Ok(())
-        }
-        else {
-            Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Slice length mismatch.".to_string()))))
+        } else {
+            Err(WingsError::Serialization(bincode::Error::new(
+                bincode::ErrorKind::Custom("Slice length mismatch.".to_string()),
+            )))
         }
     }
 }
@@ -336,14 +339,14 @@ pub static mut MARSHAL_BUFFER: Vec<u8> = Vec::new();
 /// Writes to a buffer in length-delineated sections.
 pub struct SectionedBufferWriter<'a> {
     /// The underlying buffer.
-    buffer: &'a mut Vec<u8>
+    buffer: &'a mut Vec<u8>,
 }
 
 impl SectionedBufferWriter<'static> {
     /// Creates a new writer for the marshal buffer.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// For this call to be sound, the marshal buffer must not
     /// currently be borrowed anywhere else.
     pub unsafe fn from_marshal_buffer() -> Self {
@@ -355,9 +358,7 @@ impl<'a> SectionedBufferWriter<'a> {
     /// Creates a new writer.
     pub fn new(buffer: &'a mut Vec<u8>) -> Self {
         buffer.clear();
-        Self {
-            buffer
-        }
+        Self { buffer }
     }
 
     /// Adds a section to the buffer.
@@ -377,7 +378,7 @@ pub struct SectionedBufferWrite<'a> {
     buffer: &'a mut Vec<u8>,
     /// The position at which the length should be written in the buffer
     /// when this write completes.
-    start_position: usize
+    start_position: usize,
 }
 
 impl<'a> SectionedBufferWrite<'a> {
@@ -388,7 +389,7 @@ impl<'a> SectionedBufferWrite<'a> {
 
         Self {
             buffer,
-            start_position
+            start_position,
         }
     }
 }
@@ -405,7 +406,7 @@ impl<'a> std::io::Write for SectionedBufferWrite<'a> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         std::io::Write::write(self.buffer, buf)
     }
-    
+
     fn flush(&mut self) -> std::io::Result<()> {
         std::io::Write::flush(self.buffer)
     }
@@ -433,14 +434,14 @@ impl<'a> std::io::Write for SectionedBufferWrite<'a> {
 /// Reads from a buffer in length-delineated sections.
 pub struct SectionedBufferReader<'a> {
     /// The underlying buffer.
-    buffer: &'a [u8]
+    buffer: &'a [u8],
 }
 
 impl SectionedBufferReader<'static> {
     /// Creates a new reader for the marshal buffer.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// For this call to be sound, the marshal buffer must not
     /// currently be borrowed anywhere else.
     pub unsafe fn from_marshal_buffer() -> Self {
@@ -451,25 +452,25 @@ impl SectionedBufferReader<'static> {
 impl<'a> SectionedBufferReader<'a> {
     /// Creates a new reader for the given buffer.
     pub fn new(buffer: &'a [u8]) -> Self {
-        Self {
-            buffer
-        }
+        Self { buffer }
     }
 
     /// Gets the next section in the buffer, or returns an error
     /// if the buffer was not formatted correctly.
     pub fn section(&mut self) -> Result<&[u8], WingsError> {
         if self.buffer.len() < size_of::<u32>() {
-            Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
-        }
-        else {
+            Err(WingsError::Serialization(bincode::Error::new(
+                bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()),
+            )))
+        } else {
             let mut len_bytes = [0; size_of::<u32>()];
             len_bytes.copy_from_slice(&self.buffer[0..size_of::<u32>()]);
             let len = u32::from_le_bytes(len_bytes) as usize;
             if self.buffer.len() < size_of::<u32>() + len {
-                Err(WingsError::Serialization(bincode::Error::new(bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()))))
-            }
-            else {
+                Err(WingsError::Serialization(bincode::Error::new(
+                    bincode::ErrorKind::Custom("Sectioned buffer incomplete".to_string()),
+                )))
+            } else {
                 let (beginning, rest) = self.buffer[size_of::<u32>()..].split_at(len);
                 self.buffer = rest;
                 Ok(beginning)
@@ -495,7 +496,7 @@ pub enum WingsError {
     Serialization(bincode::Error),
     /// A WASM trap occurred.
     #[error("{0}")]
-    Trap(Box<dyn std::error::Error + Send + Sync>)
+    Trap(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl WingsError {
@@ -511,9 +512,9 @@ impl WingsError {
 }
 
 /// Serializes the given object as a single section in the marshal buffer.
-/// 
+///
 /// # Safety
-/// 
+///
 /// For this function call to be sound, no references may currently
 /// exist to the marshal buffer.
 pub unsafe fn write_to_marshal_buffer(x: &impl Serialize) -> GuestPointer {

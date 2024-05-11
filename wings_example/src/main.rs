@@ -7,12 +7,10 @@ include!(concat!(env!("OUT_DIR"), "/example_plugin.rs"));
 pub struct TestHost;
 
 impl Host for TestHost {
-    const EVENTS: Events<Self> = events()
-        .with::<example_host_system::on::ExampleEvent>();
+    const EVENTS: Events<Self> = events().with::<example_host_system::on::ExampleEvent>();
 
     const SYSTEMS: Systems<Self> = systems()
-        .with::<ExampleSystemImpl>(traits()
-            .with::<dyn example_host_system::ExampleSystem>());
+        .with::<ExampleSystemImpl>(traits().with::<dyn example_host_system::ExampleSystem>());
 
     type Engine = wasmi_runtime_layer::Engine;
 
@@ -22,7 +20,7 @@ impl Host for TestHost {
 }
 
 pub struct ExampleSystemImpl {
-    value: u32
+    value: u32,
 }
 
 impl ExampleSystemImpl {
@@ -64,9 +62,7 @@ impl GeeseSystem for ExampleSystemImpl {
         .with(Self::on_example_event);
 
     fn new(_: GeeseContextHandle<Self>) -> Self {
-        Self {
-            value: 0
-        }
+        Self { value: 0 }
     }
 }
 
@@ -83,7 +79,7 @@ fn main() {
 
     // Load a module
     let module = host.load(EXAMPLE_PLUGIN_WASM).unwrap();
-    
+
     // Create an image of all the modules to instantiate
     let mut image = WingsImage::default();
     image.add::<example_host_system::Client>(&module);
@@ -91,7 +87,7 @@ fn main() {
     // Link and instantiate the systems contained in the given image
     host.instantiate(&image);
     drop(host);
-    
+
     // Process all events raised during instantiation
     ctx.flush();
 }

@@ -15,6 +15,6 @@ pub mod on {
 
     #[export_type]
     pub struct ExampleEvent {
-        pub value: u32
+        pub value: u32,
     }
 }
