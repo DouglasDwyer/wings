@@ -148,7 +148,7 @@ pub fn system_trait(
                     &trait_name,
                     func_item,
                 );
-                function_globals.push(generated.global);
+                function_globals.extend(generated.global);
                 function_invocations.push(generated.invoker);
                 function_definitions.push(generated.proxy);
             }
@@ -156,7 +156,7 @@ pub fn system_trait(
         }
     }
 
-    if !host_request {
+    if !host_request && !function_globals.is_empty() {
         panic!("Cannot define global functions for non-host systems.");
     }
 
@@ -328,7 +328,7 @@ fn generate_global_function(
     func_item: &TraitItemFn,
     args: &FuncArgs,
     global_name: Option<Ident>,
-) -> TokenStream {
+) -> Option<TokenStream> {
     if let Some(ident) = global_name {
         let mut func_signature = func_item.sig.clone();
 
@@ -341,16 +341,16 @@ fn generate_global_function(
         let func_ident = &func_item.sig.ident;
         let arg_names = &args.original_args;
 
-        quote! {
+        Some(quote! {
             pub #func_signature {
                 unsafe {
                     <dyn #trait_name as ::wings::marshal::Proxyable>::create_proxy(::wings::marshal::proxy_index::<dyn #trait_name>())
                         . #func_ident( #( #arg_names , )* )
                 }
             }
-        }
+        })
     } else {
-        quote! {}
+        None
     }
 }
 
@@ -590,7 +590,7 @@ struct FuncArgs<'a> {
 /// Holds the token streams of procedurally-generated functions for a proxy object.
 struct ProxyFunction {
     /// The tokens for invoking the proxy function globally, if any.
-    global: TokenStream,
+    global: Option<TokenStream>,
     /// The tokens for locally invoking the underlying function.
     invoker: TokenStream,
     /// The tokens for requesting a remote proxy call.
