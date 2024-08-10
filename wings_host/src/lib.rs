@@ -298,16 +298,21 @@ impl<H: Host> WingsHost<H> {
 
     /// Unloads the existing image and replaces it with the provided one.
     /// All top-level systems in the given image will be instantiated.
-    pub fn instantiate(&mut self, image: &WingsImage) {
+    pub fn instantiate(&mut self, image: &WingsImage) -> Result<(), WingsError> {
         assert!(
             image.modules.iter().all(|x| self.id == x.0.host_id),
             "Image contained modules from another host"
         );
         if let Err(error) = self.clear_image() {
-            self.handle_error(error);
+            self.reset_store();
+            Err(error)
         }
-        if let Err(error) = self.try_instantiate(image) {
-            self.handle_error(error);
+        else if let Err(error) = self.try_instantiate(image) {
+            self.reset_store();
+            Err(error)
+        }
+        else {
+            Ok(())
         }
     }
 
@@ -684,10 +689,6 @@ impl<H: Host> WingsHost<H> {
         let mut data = take(&mut self.store)
             .expect("Failed to get store")
             .into_data();
-        data.ctx
-            .as_ref()
-            .expect("Failed to get context")
-            .raise_event(on::ImageReloaded);
         data.guest_event_handlers.clear();
         data.instance_funcs.clear();
         data.memories.clear();
@@ -1513,14 +1514,13 @@ extern "C" fn __wings_raise_event(_: GuestPointer, _: u32) {
 pub mod on {
     use super::*;
 
-    /// Indicates that an error happened within a WASM plugin.
+    /// Indicates that an error happened within a WASM plugin. Once an error
+    /// is raised, the host will not execute any more WASM code until a new
+    /// image has been instantiated.
     pub struct Error {
         /// The error that occurred.
         pub error: WingsError,
     }
-
-    /// Raised whenever a new WASM image is loaded.
-    pub struct ImageReloaded;
 
     /// Stores a weakly-typed guest event, which should be raised to all
     /// guests at the appropriate time.

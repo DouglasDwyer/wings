@@ -475,7 +475,7 @@ unsafe extern "C" fn __wings_invoke_proxy_func(
     func(
         FatGuestPointer::new(pointer, metadata),
         func_index,
-        &mut *std::ptr::addr_of_mut!(MARSHAL_BUFFER),
+        std::ptr::addr_of_mut!(MARSHAL_BUFFER),
     );
     (*std::ptr::addr_of_mut!(MARSHAL_BUFFER)).len() as u32
 }
