@@ -89,6 +89,7 @@ use std::mem::*;
 use std::ops::*;
 pub use wings_macro::{export_system, export_type, instantiate_systems, system_trait};
 use wings_marshal::exported_type::*;
+pub use wings_marshal::exported_type::{ExportedType, StaticExportedType};
 pub use wings_marshal::WingsError;
 use wings_marshal::*;
 
